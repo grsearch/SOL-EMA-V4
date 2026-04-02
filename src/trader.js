@@ -3,7 +3,7 @@
 // Architecture:
 //   • Uses Jupiter Ultra API (Pro I) for swap quote + execute
 //   • Anti-sandwich via Jito bundle tip + priority fee
-//   • EMA death-cross: EMA9 下穿 EMA20 立即全仓卖出
+//   • EMA death-cross: EMA9<EMA20 且 EMA20↓ 连续2次确认后全仓卖出
 //   • Dynamic slippage retry: each retry widens slippage ×1.5, max 2000 bps
 //
 // 已删除：硬止损、移动止损、分批止盈（全部由 EMA 死叉统一处理）

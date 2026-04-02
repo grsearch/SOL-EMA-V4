@@ -4,16 +4,18 @@
 //   webhook 收到代币 → 查 FDV + LP → $15,000 ≤ FDV ≤ $60,000 且 LP ≥ $5,000 → 立即用 0.5 SOL 买入
 //   条件不满足 → 静默拒绝，不再跟踪
 //
-// 出场策略（纯 EMA 死叉）：
-//   1. EMA死叉   EMA9 < EMA20 立即卖出（15秒K线，1秒轮询）
-//   2. 监控到期  30分钟后清仓退出
+// 出场策略（沿用 PUMP-EMA-15S 实战验证逻辑）：
+//   1. EMA死叉   EMA9 < EMA20 且 EMA20 斜率向下，连续2次确认后卖出
+//                （15秒K线，1秒轮询，自然预热约5分钟）
+//   2. FDV止损   FDV 跌破 $15,000 立即清仓（不等EMA预热，30秒检查一次）
+//   3. 监控到期  30分钟后清仓退出
 //
 // 已删除：硬止损、浮动止盈、分批止盈
 
 'use strict';
 
 const birdeye                          = require('./birdeye');
-const { evaluateSignal, buildCandles, EMA_SLOW, WARMUP_CANDLES } = require('./ema');
+const { evaluateSignal, buildCandles } = require('./ema');
 const trader                           = require('./trader');
 const { broadcastToClients }           = require('./wsHub');
 const logger                           = require('./logger');
@@ -72,9 +74,8 @@ class TokenMonitor {
       // Position tracking (null = no open position)
       position:     null,
       pnlPct:       null,
-      // EMA warmup tracking
-      _candlesSinceBuy: 0,
-      _lastCandleCount: 0,
+      // EMA state（bearishCount 由 evaluateSignal 直接读写）
+      bearishCount: 0,
       // Lifecycle flags
       bought:       false,
       exitSent:     false,
@@ -146,23 +147,9 @@ class TokenMonitor {
       state.bought     = true;
       state.lastSignal = 'BUY';
 
-      // ── 种子K线：用买入价回填历史K线，让EMA立即可用 ──────────
-      // EMA20 需要 21 根K线才能计算。买入时用 entryPrice 填充前 EMA_SLOW+WARMUP 根K线，
-      // 这样第一根真实K线收盘后就能开始死叉判断，不用再等5分钟。
-      // 种子K线全部相同价格 → EMA9 = EMA20 = entryPrice，不会误触发
-      const seedPrice = pos.entryPriceUsd;
-      const seedCount = EMA_SLOW + WARMUP_CANDLES + 2;  // 多填几根确保充足
-      const now = Date.now();
-      for (let i = seedCount; i >= 1; i--) {
-        state.ticks.push({
-          time:  now - i * KLINE_INTERVAL_SEC * 1000,
-          price: seedPrice,
-        });
-      }
-      // 预热计数器直接跳过预热期（种子K线已经提供了足够的历史）
-      state._candlesSinceBuy = WARMUP_CANDLES;
-      state._lastCandleCount = 0;
-      logger.info(`[Monitor] 🌱 Seeded ${seedCount} ticks @ ${seedPrice} for ${state.symbol} — EMA ready immediately`);
+      // 不使用种子K线。EMA20 需要 21 根 15秒K线（约5分钟）自然积累后才有效值。
+      // 预热期内 evaluateSignal 返回 warming_up，不会触发任何卖出信号。
+      // 这是 PUMP-EMA-15S 经过实战验证的方式，简洁可靠。
 
       this._addTradeLog({ type: 'BUY', symbol: state.symbol, reason: 'WHITELIST_IMMEDIATE' });
 
@@ -189,6 +176,13 @@ class TokenMonitor {
       const created = overview.createdAt || overview.created_at || null;
       if (created) {
         state.age = ((Date.now() - created * 1000) / 60000).toFixed(1);
+      }
+
+      // FDV 跌破买入门槛 → 立即清仓（相当于止损）
+      // 不等 EMA 预热，买入后任何时刻 FDV < FDV_MIN_USD 都会触发
+      if (state.inPosition && state.position && state.fdv !== null && state.fdv < FDV_MIN_USD) {
+        logger.warn(`[Monitor] ⚠️ FDV止损: ${state.symbol} FDV=$${state.fdv} < $${FDV_MIN_USD} — 立即清仓`);
+        await this._doExit(state, `FDV_DROP($${state.fdv}<$${FDV_MIN_USD})`);
       }
     } catch (e) {
       logger.warn(`[Monitor] meta refresh error ${state.symbol}: ${e.message}`);
@@ -252,34 +246,27 @@ class TokenMonitor {
 
         // ── EMA 死叉评估 ──────────────────────────────────────
         if (state.inPosition && state.ticks.length >= 2) {
-          // 用全部K线（含当前未收盘的），实时反应价格变动
+          // 用全部K线（含当前未收盘的），与 PUMP-EMA-15S 一致
           state.candles = buildCandles(state.ticks, KLINE_INTERVAL_SEC);
-
-          // 追踪买入后经过了多少根K线（用于预热保护）
-          const currentCandleCount = state.candles.length;
-          if (currentCandleCount > state._lastCandleCount) {
-            state._candlesSinceBuy += (currentCandleCount - state._lastCandleCount);
-            state._lastCandleCount = currentCandleCount;
-          }
 
           const result = evaluateSignal(state.candles, state);
           state.ema9   = result.ema9;
           state.ema20  = result.ema20;
 
-          // 调试日志：每次评估都打印
+          // 调试日志
           if (!isNaN(result.ema9) && !isNaN(result.ema20)) {
             const gap = ((result.ema9 - result.ema20) / result.ema20 * 100).toFixed(3);
             logger.info(
               `[EMA] ${state.symbol}` +
-              ` | candles=${currentCandleCount}` +
-              ` | warmup=${state._candlesSinceBuy}` +
+              ` | candles=${state.candles.length}` +
+              ` | bearish=${state.bearishCount||0}` +
               ` | EMA9=${result.ema9.toExponential(4)}` +
               ` | EMA20=${result.ema20.toExponential(4)}` +
               ` | gap=${gap}%` +
               ` | signal=${result.signal || 'HOLD'}` +
               ` | ${result.reason}`
             );
-          } else {
+          } else if (result.reason) {
             logger.info(`[EMA] ${state.symbol} | ${result.reason}`);
           }
 

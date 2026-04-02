@@ -21,12 +21,14 @@ Solana 新币 EMA9/EMA20 策略监控 + Jupiter 自动交易机器人。
 
 | 优先级 | 条件 | 行为 |
 |--------|------|------|
-| 1 | EMA9 < EMA20（死叉） | 立即全仓卖出 |
-| 2 | 监控30分钟到期 | 清仓退出，移除白名单 |
+| 1 | EMA9 < EMA20 且 EMA20 斜率向下，连续2次确认 | 全仓卖出 |
+| 2 | FDV 跌破 $15,000 | 立即清仓（不等EMA预热，30秒检查一次） |
+| 3 | 监控30分钟到期 | 清仓退出，移除白名单 |
 
 - **15秒K线聚合**：1秒轮询采集价格，每15秒聚合一根K线
-- **EMA预热保护**：买入后前5根K线（约75秒）不触发死叉，等EMA值稳定
-- **实时计算**：包含当前未收盘K线参与EMA计算，不等K线收盘
+- **自然预热**：EMA20需要21根K线（约5分钟）才能计算，预热期内不触发任何信号
+- **防震荡确认**：死叉条件需连续2次评估都成立才触发（EMA_CONFIRM_BARS=2）
+- **沿用 PUMP-EMA-15S 实战验证的策略**，不使用种子K线
 
 ---
 
@@ -37,7 +39,7 @@ sol-ema-v2/
 ├── src/
 │   ├── index.js        # 主入口，HTTP + WebSocket
 │   ├── monitor.js      # 核心引擎（1s轮询、15sK线、EMA死叉判断）
-│   ├── ema.js          # EMA计算 + SELL信号（EMA9<EMA20即卖）
+│   ├── ema.js          # EMA计算 + SELL信号（EMA9<EMA20 & EMA20↓ ×2确认）
 │   ├── trader.js       # Jupiter交易（买入/卖出）
 │   ├── birdeye.js      # Birdeye API封装
 │   ├── reporter.js     # 每日报告
@@ -132,7 +134,7 @@ http://YOUR_SERVER_IP:3001
 | `LP_MIN_USD` | `5000` | 最低LP门槛 |
 | `EMA_FAST` | `9` | EMA快线周期 |
 | `EMA_SLOW` | `20` | EMA慢线周期 |
-| `EMA_WARMUP_CANDLES` | `5` | 买入后预热K线数 |
+| `EMA_CONFIRM_BARS` | `2` | 死叉确认次数（连续N次EMA9<EMA20且EMA20↓） |
 | `PRICE_POLL_SEC` | `1` | 价格轮询间隔（秒） |
 | `KLINE_INTERVAL_SEC` | `15` | K线宽度（秒） |
 | `PORT` | `3001` | HTTP端口 |
