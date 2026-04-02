@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SOL EMA · 24h Stats</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0e14;--bg2:#111620;--bg3:#161d2a;
+  --border:#1e2a3a;--border2:#253448;
+  --text1:#e2e8f0;--text2:#8899aa;--text3:#566478;
+  --green:#00e59b;--green-dim:rgba(0,229,155,.1);
+  --red:#ff4d6d;--red-dim:rgba(255,77,109,.1);
+  --yellow:#f5a623;--yellow-dim:rgba(245,166,35,.1);
+  --cyan:#00e5ff;--cyan-dim:rgba(0,229,255,.08);
+  --blue:#3b82f6;--mono:'JetBrains Mono',monospace;
+}
+body{background:var(--bg);color:var(--text1);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:13px;min-height:100vh}
+
+/* ── Header ── */
+.header{background:var(--bg2);border-bottom:1px solid var(--border);padding:0 20px;height:52px;display:flex;align-items:center;gap:16px}
+.header-logo{font-size:13px;font-weight:600;color:var(--cyan);letter-spacing:.05em}
+.header-sub{font-size:11px;color:var(--text3)}
+.nav-link{margin-left:auto;font-size:12px;color:var(--text2);text-decoration:none;border:1px solid var(--border);padding:4px 12px;border-radius:4px}
+.nav-link:hover{color:var(--text1);border-color:var(--border2)}
+.refresh-btn{font-size:11px;color:var(--text2);background:none;border:1px solid var(--border);padding:4px 10px;border-radius:4px;cursor:pointer;margin-left:8px}
+.refresh-btn:hover{color:var(--text1)}
+
+/* ── Summary cards ── */
+.summary{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;padding:16px 20px}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:12px 14px}
+.card .lb{font-size:11px;color:var(--text3);margin-bottom:6px}
+.card .vl{font-size:20px;font-weight:600;font-family:var(--mono)}
+.up{color:var(--green)}.dn{color:var(--red)}.neu{color:var(--text1)}
+
+/* ── Table ── */
+.table-wrap{padding:0 20px 20px;overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:1200px}
+thead th{text-align:left;padding:8px 10px;color:var(--text3);font-weight:500;font-size:11px;border-bottom:1px solid var(--border);white-space:nowrap;cursor:pointer;user-select:none}
+thead th:hover{color:var(--text2)}
+thead th.sort-asc::after{content:' ▲'}
+thead th.sort-desc::after{content:' ▼'}
+tbody tr{border-bottom:1px solid var(--border);transition:background .1s}
+tbody tr:hover{background:var(--bg3)}
+tbody tr.win{border-left:2px solid var(--green)}
+tbody tr.loss{border-left:2px solid var(--red)}
+tbody tr.open{border-left:2px solid var(--cyan)}
+td{padding:8px 10px;vertical-align:middle;white-space:nowrap}
+.mono{font-family:var(--mono)}
+
+.badge{display:inline-block;font-size:10px;padding:2px 7px;border-radius:3px;font-weight:500}
+.badge-green{background:var(--green-dim);color:var(--green)}
+.badge-red{background:var(--red-dim);color:var(--red)}
+.badge-yellow{background:var(--yellow-dim);color:var(--yellow)}
+.badge-cyan{background:var(--cyan-dim);color:var(--cyan)}
+.badge-gray{background:var(--bg3);color:var(--text3)}
+
+.addr-link{color:var(--cyan);text-decoration:none;font-family:var(--mono);font-size:11px}
+.addr-link:hover{text-decoration:underline}
+
+.pnl-pos{color:var(--green);font-family:var(--mono)}
+.pnl-neg{color:var(--red);font-family:var(--mono)}
+.pnl-neu{color:var(--text2);font-family:var(--mono)}
+
+.fdv-val{font-family:var(--mono);color:var(--text1)}
+.fdv-cur{font-family:var(--mono);color:var(--yellow)}
+
+/* ── Empty state ── */
+.empty{text-align:center;padding:60px 20px;color:var(--text3)}
+
+/* ── Last updated ── */
+.footer{padding:10px 20px;font-size:11px;color:var(--text3);text-align:right}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">SOL EMA MONITOR v2</div>
+  <div class="header-sub">24小时交易统计</div>
+  <a class="nav-link" href="/">← 实时监控</a>
+  <button class="refresh-btn" onclick="load()">刷新</button>
+</div>
+
+<!-- 报告下载栏 -->
+<div id="reports-bar" style="background:var(--bg2);border-bottom:1px solid var(--border);padding:8px 20px;display:flex;align-items:center;gap:12px;min-height:38px">
+  <span style="font-size:11px;color:var(--text3)">📥 每日报告（北京时间08:00自动生成）：</span>
+  <div id="report-links" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+</div>
+
+<div class="summary" id="summary">
+  <div class="card"><div class="lb">总交易</div><div class="vl neu" id="s-total">—</div></div>
+  <div class="card"><div class="lb">盈利</div><div class="vl up" id="s-win">—</div></div>
+  <div class="card"><div class="lb">亏损</div><div class="vl dn" id="s-loss">—</div></div>
+  <div class="card"><div class="lb">持仓中</div><div class="vl" style="color:var(--cyan)" id="s-open">—</div></div>
+  <div class="card"><div class="lb">净盈亏 (SOL)</div><div class="vl" id="s-pnl">—</div></div>
+  <div class="card"><div class="lb">胜率</div><div class="vl" id="s-wr">—</div></div>
+</div>
+
+<div class="table-wrap">
+  <table id="tbl">
+    <thead>
+      <tr>
+        <th data-col="symbol">币种</th>
+        <th data-col="entryFdv">买入FDV</th>
+        <th data-col="entryLp">买入LP</th>
+        <th data-col="entryLpFdv">LP/FDV</th>
+        <th data-col="xMentions">X提及</th>
+        <th data-col="holders">Holders</th>
+        <th data-col="top10Pct">Top10%</th>
+        <th data-col="devPct">Dev%</th>
+        <th data-col="exitFdv">卖出FDV</th>
+        <th data-col="currentFdv">当前FDV</th>
+        <th data-col="pnlPct">盈亏%</th>
+        <th data-col="solReceived">盈亏SOL</th>
+        <th data-col="exitReason">退出原因</th>
+        <th>合约地址</th>
+        <th data-col="buyAt">时间</th>
+      </tr>
+    </thead>
+    <tbody id="tbody"></tbody>
+  </table>
+  <div class="empty" id="empty" style="display:none">暂无24小时内的交易记录</div>
+</div>
+
+<div class="footer" id="footer"></div>
+
+<script>
+let records = [];
+let sortCol = 'buyAt';
+let sortDir = -1;
+
+async function loadReports() {
+  try {
+    const r = await fetch('/api/reports');
+    const reports = await r.json();
+    const el = document.getElementById('report-links');
+    if (!reports.length) {
+      el.innerHTML = '<span style="font-size:11px;color:var(--text3)">暂无报告</span>';
+      return;
+    }
+    el.innerHTML = reports.map(rep => {
+      const size = rep.size > 1024 ? (rep.size/1024).toFixed(1) + 'KB' : rep.size + 'B';
+      return `<a href="${rep.url}" download style="font-size:11px;color:var(--cyan);text-decoration:none;border:1px solid var(--border);padding:3px 10px;border-radius:3px;background:var(--bg3)">${rep.date} <span style="color:var(--text3)">(${size})</span></a>`;
+    }).join('');
+  } catch(e) {}
+}
+
+async function load() {
+  try {
+    const r = await fetch('/api/trade-records');
+    records = await r.json();
+    render();
+    updateSummary();
+    document.getElementById('footer').textContent =
+      '最后更新：' + new Date().toLocaleTimeString('zh-CN') + '　　当前FDV每15分钟自动刷新';
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+function fmtK(v) {
+  if (v == null) return '—';
+  if (v >= 1000000) return '$' + (v/1000000).toFixed(2) + 'M';
+  if (v >= 1000) return '$' + (v/1000).toFixed(1) + 'K';
+  return '$' + Math.round(v);
+}
+
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  return d.toLocaleTimeString('zh-CN', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+
+function exitBadge(reason) {
+  if (!reason) return '<span class="badge badge-cyan">持仓中</span>';
+  if (reason.includes('AGE_EXPIRY')) return '<span class="badge badge-gray">到期</span>';
+  if (reason.includes('MANUAL')) return '<span class="badge badge-yellow">手动</span>';
+  if (reason.includes('EMA') || reason.includes('SELL') || reason.includes('死叉'))
+    return '<span class="badge badge-yellow">EMA死叉</span>';
+  return `<span class="badge badge-gray">${reason.slice(0,12)}</span>`;
+}
+
+function pnlClass(v) {
+  if (v == null) return 'pnl-neu';
+  return parseFloat(v) >= 0 ? 'pnl-pos' : 'pnl-neg';
+}
+
+function render() {
+  const sorted = [...records].sort((a, b) => {
+    let av = a[sortCol], bv = b[sortCol];
+    if (av == null) av = sortDir > 0 ? Infinity : -Infinity;
+    if (bv == null) bv = sortDir > 0 ? Infinity : -Infinity;
+    if (typeof av === 'string') av = av.replace('%','');
+    if (typeof bv === 'string') bv = bv.replace('%','');
+    return (parseFloat(av) - parseFloat(bv)) * sortDir;
+  });
+
+  const tbody = document.getElementById('tbody');
+  const empty = document.getElementById('empty');
+
+  if (!sorted.length) {
+    tbody.innerHTML = '';
+    empty.style.display = '';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = sorted.map(r => {
+    const isOpen   = !r.exitAt;
+    const pnl      = parseFloat(r.pnlPct || '0');
+    const rowClass = isOpen ? 'open' : (pnl >= 0 ? 'win' : 'loss');
+    const pnlSol = r.solReceived != null
+      ? (r.solReceived - r.solSpent).toFixed(3)
+      : (r.pnlPct != null && r.solSpent)
+        ? (r.solSpent * parseFloat(r.pnlPct) / 100).toFixed(3)
+        : null;
+    const addrShort = r.address.slice(0,6) + '...' + r.address.slice(-4);
+    const gmgnUrl   = `https://gmgn.ai/sol/token/${r.address}`;
+
+    return `<tr class="${rowClass}">
+      <td><b style="color:var(--text1)">${r.symbol}</b></td>
+      <td class="fdv-val">${fmtK(r.entryFdv)}</td>
+      <td class="fdv-val">${fmtK(r.entryLp)}</td>
+      <td class="mono">${r.entryLpFdv != null ? r.entryLpFdv + '%' : '—'}</td>
+      <td class="mono">${r.xMentions ?? '—'}</td>
+      <td class="mono">${r.holders != null ? r.holders.toLocaleString() : '—'}</td>
+      <td class="mono">${r.top10Pct ?? '—'}</td>
+      <td class="mono">${r.devPct ?? '—'}</td>
+      <td class="fdv-val">${isOpen ? '—' : fmtK(r.exitFdv)}</td>
+      <td class="fdv-cur">${fmtK(r.currentFdv)}</td>
+      <td class="${pnlClass(r.pnlPct)}">${r.pnlPct != null ? (pnl >= 0 ? '+' : '') + parseFloat(r.pnlPct).toFixed(1) + '%' : '—'}</td>
+      <td class="${pnlClass(pnlSol)}">${pnlSol != null ? (parseFloat(pnlSol) >= 0 ? '+' : '') + pnlSol + ' SOL' : '—'}</td>
+      <td>${exitBadge(r.exitReason)}</td>
+      <td><a class="addr-link" href="${gmgnUrl}" target="_blank" rel="noopener">${addrShort}</a></td>
+      <td class="mono" style="color:var(--text3)">${fmtTime(r.buyAt)}</td>
+    </tr>`;
+  }).join('');
+}
+
+function updateSummary() {
+  const closed = records.filter(r => r.exitAt);
+  const open   = records.filter(r => !r.exitAt);
+  const wins   = closed.filter(r => parseFloat(r.pnlPct || '0') >= 0);
+  const losses = closed.filter(r => parseFloat(r.pnlPct || '0') < 0);
+
+  const netSol = closed.reduce((acc, r) => {
+    if (r.solReceived != null) return acc + (r.solReceived - r.solSpent);
+    if (r.pnlPct != null && r.solSpent) {
+      return acc + r.solSpent * parseFloat(r.pnlPct) / 100;
+    }
+    return acc;
+  }, 0);
+
+  const wr = closed.length ? (wins.length / closed.length * 100).toFixed(0) + '%' : '—';
+
+  document.getElementById('s-total').textContent = records.length;
+  document.getElementById('s-win').textContent   = wins.length;
+  document.getElementById('s-loss').textContent  = losses.length;
+  document.getElementById('s-open').textContent  = open.length;
+  const pnlEl = document.getElementById('s-pnl');
+  pnlEl.textContent = (netSol >= 0 ? '+' : '') + netSol.toFixed(3) + ' SOL';
+  pnlEl.className   = 'vl ' + (netSol >= 0 ? 'up' : 'dn');
+  document.getElementById('s-wr').textContent = wr;
+  document.getElementById('s-wr').className   = 'vl ' + (parseFloat(wr) >= 50 ? 'up' : 'dn');
+}
+
+// 排序
+document.querySelectorAll('thead th[data-col]').forEach(th => {
+  th.addEventListener('click', () => {
+    const col = th.dataset.col;
+    if (sortCol === col) sortDir *= -1;
+    else { sortCol = col; sortDir = -1; }
+    document.querySelectorAll('thead th').forEach(t => t.classList.remove('sort-asc','sort-desc'));
+    th.classList.add(sortDir > 0 ? 'sort-asc' : 'sort-desc');
+    render();
+  });
+});
+
+// 自动刷新（每60秒）
+load();
+loadReports();
+setInterval(load, 60_000);
+setInterval(loadReports, 5 * 60_000);  // 报告列表每5分钟检查一次
+</script>
+</body>
+</html>

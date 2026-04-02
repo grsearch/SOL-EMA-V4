@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>SOL EMA Monitor v2</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#050A0E;--bg2:#0B1218;--bg3:#101820;
+  --border:#1A2A35;--border2:#243545;
+  --cyan:#00E5FF;--cyan-dim:rgba(0,229,255,.12);
+  --green:#00FF9C;--green-dim:rgba(0,255,156,.1);
+  --red:#FF3A5C;--red-dim:rgba(255,58,92,.1);
+  --yellow:#FFD600;--yellow-dim:rgba(255,214,0,.1);
+  --purple:#B57BFF;--purple-dim:rgba(181,123,255,.1);
+  --orange:#FF8C42;--orange-dim:rgba(255,140,66,.1);
+  --text:#C8D8E8;--text2:#5E7A8A;--text3:#38505F;
+  --mono:'JetBrains Mono',monospace;
+  --sans:'Space Grotesk',sans-serif;
+  --radius:6px;
+}
+html{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;min-height:100vh}
+body{display:flex;flex-direction:column;min-height:100vh}
+::-webkit-scrollbar{width:5px;height:5px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+
+/* ── Header ── */
+header{display:flex;align-items:center;justify-content:space-between;padding:10px 24px;border-bottom:1px solid var(--border);background:var(--bg2);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:10px}
+.logo-icon{width:30px;height:30px;border-radius:6px;background:linear-gradient(135deg,var(--cyan),var(--green));display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#000;font-family:var(--mono)}
+.logo-text{font-family:var(--mono);font-weight:700;font-size:14px;color:var(--cyan);letter-spacing:.05em}
+.logo-sub{font-size:10px;color:var(--text2);letter-spacing:.08em}
+.header-right{display:flex;align-items:center;gap:12px}
+.ws-status{display:flex;align-items:center;gap:5px;font-family:var(--mono);font-size:11px;color:var(--text2)}
+.ws-dot{width:7px;height:7px;border-radius:50%;background:var(--text3);transition:background .3s}
+.ws-dot.connected{background:var(--green);box-shadow:0 0 6px var(--green)}
+.ws-dot.error{background:var(--red);box-shadow:0 0 6px var(--red)}
+.pill{display:flex;align-items:center;gap:5px;background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 10px;font-family:var(--mono);font-size:10px}
+.pill .lbl{color:var(--text2)}.pill .val{color:var(--cyan);font-weight:600}
+
+/* ── Layout ── */
+.container{flex:1;display:grid;grid-template-columns:1fr 360px;overflow:hidden}
+.main-panel{overflow-y:auto;padding:16px 16px 16px 20px}
+.side-panel{border-left:1px solid var(--border);overflow-y:auto;display:flex;flex-direction:column}
+
+/* ── Stats bar ── */
+.stats-bar{display:grid;grid-template-columns:repeat(5,1fr);gap:0;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2);overflow:hidden;margin-bottom:16px}
+.sb-item{padding:10px 14px;border-right:1px solid var(--border)}
+.sb-item:last-child{border-right:none}
+.sb-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.12em;color:var(--text3);font-family:var(--mono);margin-bottom:3px}
+.sb-val{font-family:var(--mono);font-size:16px;font-weight:700;color:var(--cyan)}
+
+/* ── Section ── */
+.section-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.section-title{font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--text2);display:flex;align-items:center;gap:7px}
+.section-title::before{content:'';width:3px;height:11px;background:var(--cyan);border-radius:2px;display:inline-block}
+.badge{background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(0,229,255,.2);border-radius:10px;padding:1px 7px;font-size:10px;font-family:var(--mono)}
+
+/* ── Token cards ── */
+#tokens-container{display:flex;flex-direction:column;gap:10px}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:50px 20px;color:var(--text3);text-align:center;border:1px dashed var(--border);border-radius:var(--radius)}
+.empty-state .icon{font-size:30px;margin-bottom:10px;opacity:.4}
+.empty-state p{font-size:11px;line-height:1.6}
+
+.token-card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden;transition:border-color .2s;position:relative}
+.token-card:hover{border-color:var(--border2)}
+.token-card.in-position{border-left:3px solid var(--green)}
+.token-card.sold{border-left:3px solid var(--red)}
+.token-card.watching{border-left:3px solid var(--cyan)}
+.token-card.pending{border-left:3px solid var(--text3)}
+
+.card-header{display:flex;align-items:center;justify-content:space-between;padding:10px 14px 8px;border-bottom:1px solid var(--border)}
+.token-info{display:flex;align-items:center;gap:8px}
+.token-symbol{font-family:var(--mono);font-weight:700;font-size:15px;color:#fff}
+.token-address{font-family:var(--mono);font-size:10px;color:var(--text2);text-decoration:none;border-bottom:1px dashed var(--border2);transition:color .2s}
+.token-address:hover{color:var(--cyan)}
+
+.sig-badge{padding:2px 8px;border-radius:3px;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.08em}
+.sig-badge.BUY{background:var(--green-dim);color:var(--green);border:1px solid rgba(0,255,156,.25)}
+.sig-badge.SELL{background:var(--red-dim);color:var(--red);border:1px solid rgba(255,58,92,.25)}
+.sig-badge.WATCHING{background:var(--cyan-dim);color:var(--cyan);border:1px solid rgba(0,229,255,.2)}
+.sig-badge.PENDING{background:var(--bg3);color:var(--text3);border:1px solid var(--border)}
+
+/* Metrics row */
+.card-body{display:grid;grid-template-columns:repeat(6,1fr);gap:0}
+.metric{padding:8px 12px;border-right:1px solid var(--border)}
+.metric:last-child{border-right:none}
+.metric-label{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);margin-bottom:3px;font-family:var(--mono)}
+.metric-value{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--text)}
+.metric-value.pos{color:var(--green)}.metric-value.neg{color:var(--red)}
+.metric-value.cyan{color:var(--cyan)}.metric-value.yellow{color:var(--yellow)}
+.metric-value.purple{color:var(--purple)}
+
+/* EMA row */
+.card-ema{display:flex;align-items:center;flex-wrap:wrap;gap:0;padding:6px 14px;background:var(--bg3);border-top:1px solid var(--border);font-family:var(--mono);font-size:10px}
+.ema-item{display:flex;align-items:center;gap:5px;margin-right:14px}
+.ema-label{color:var(--text3)}.ema-val{font-weight:600}
+.ema-val.fast{color:var(--yellow)}.ema-val.slow{color:var(--cyan)}
+.ema-cross{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.06em;padding:2px 7px;border-radius:3px}
+.ema-cross.bearish{background:var(--red-dim);color:var(--red)}
+.ema-cross.bullish{background:var(--green-dim);color:var(--green)}
+.ema-cross.neutral{background:var(--bg);color:var(--text3)}
+
+/* TP progress bar */
+.tp-bar{padding:6px 14px;border-top:1px solid var(--border);background:var(--bg3)}
+.tp-bar-label{font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px}
+.tp-levels{display:flex;gap:6px}
+.tp-level{flex:1;text-align:center;padding:3px 6px;border-radius:3px;font-family:var(--mono);font-size:9px;font-weight:700;border:1px solid var(--border);color:var(--text3)}
+.tp-level.hit{border-color:var(--green);background:var(--green-dim);color:var(--green)}
+.tp-level.active{border-color:var(--yellow);background:var(--yellow-dim);color:var(--yellow);animation:pulse 1.5s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* Position bar */
+.position-bar{padding:5px 14px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10px}
+.pos-indicator{padding:2px 7px;border-radius:3px;font-weight:700;font-size:9px}
+.pos-indicator.holding{background:var(--green-dim);color:var(--green);border:1px solid rgba(0,255,156,.25)}
+.pos-indicator.flat{background:var(--bg);color:var(--text3);border:1px solid var(--border)}
+
+/* Mini chart */
+.card-chart{padding:6px 14px 8px;border-top:1px solid var(--border)}
+.chart-label{font-family:var(--mono);font-size:9px;color:var(--text3);margin-bottom:3px;letter-spacing:.08em}
+.mini-chart{width:100%;height:36px;overflow:hidden}
+.mini-chart svg{width:100%;height:100%}
+
+/* Remove btn */
+.btn-remove{position:absolute;top:8px;right:8px;background:none;border:1px solid var(--border);border-radius:3px;color:var(--text3);font-size:10px;padding:1px 5px;cursor:pointer;transition:all .2s;font-family:var(--mono)}
+.btn-remove:hover{background:var(--red-dim);color:var(--red);border-color:var(--red)}
+
+/* ── Side panel ── */
+.side-section{padding:14px}
+.side-section+.side-section{border-top:1px solid var(--border)}
+#trade-log{display:flex;flex-direction:column;gap:5px}
+
+.trade-entry{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:7px 9px;display:grid;grid-template-columns:auto 1fr auto;gap:5px;align-items:start;animation:slideIn .25s ease}
+@keyframes slideIn{from{opacity:0;transform:translateX(8px)}to{opacity:1;transform:none}}
+.te-type{font-family:var(--mono);font-size:10px;font-weight:700;padding:1px 5px;border-radius:2px;white-space:nowrap}
+.te-type.BUY{background:var(--green-dim);color:var(--green)}
+.te-type.SELL{background:var(--red-dim);color:var(--red)}
+.te-type.PARTIAL_SELL{background:var(--orange-dim);color:var(--orange)}
+.te-type.EXIT{background:var(--purple-dim);color:var(--purple)}
+.te-info{display:flex;flex-direction:column;gap:2px;min-width:0}
+.te-symbol{font-family:var(--mono);font-size:11px;font-weight:600;color:#fff}
+.te-reason{font-size:10px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.te-time{font-family:var(--mono);font-size:9px;color:var(--text3);white-space:nowrap}
+
+/* ── Config panel ── */
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.cfg-item{background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:7px 9px}
+.cfg-label{font-size:9px;text-transform:uppercase;letter-spacing:.1em;color:var(--text3);font-family:var(--mono);margin-bottom:2px}
+.cfg-value{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--yellow)}
+
+/* ── Toasts ── */
+#toast-container{position:fixed;bottom:18px;right:18px;display:flex;flex-direction:column;gap:6px;z-index:9999}
+.toast{background:var(--bg2);border:1px solid var(--border2);border-radius:6px;padding:9px 12px;min-width:220px;max-width:300px;animation:toastIn .25s ease;font-family:var(--mono);font-size:11px}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(8px)}}
+.toast.buy{border-left:3px solid var(--green)}
+.toast.sell{border-left:3px solid var(--red)}
+.toast.partial{border-left:3px solid var(--orange)}
+.toast.info{border-left:3px solid var(--cyan)}
+
+@media(max-width:900px){
+  .container{grid-template-columns:1fr}
+  .side-panel{border-left:none;border-top:1px solid var(--border)}
+  .card-body{grid-template-columns:repeat(3,1fr)}
+  .stats-bar{grid-template-columns:repeat(3,1fr)}
+}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">
+    <div class="logo-icon">Σ</div>
+    <div>
+      <div class="logo-text">SOL EMA MONITOR v2</div>
+      <div class="logo-sub">5m Candle · EMA9/20 · Tiered TP · Jupiter Bot</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <div class="pill"><span class="lbl">EMA</span><span class="val">9/20</span></div>
+    <div class="pill"><span class="lbl">K线</span><span class="val">5min</span></div>
+    <div class="pill"><span class="lbl">轮询</span><span class="val">5s</span></div>
+    <div class="pill"><span class="lbl">MAX</span><span class="val">4h</span></div>
+    <div class="ws-status">
+      <div class="ws-dot" id="ws-dot"></div>
+      <span id="ws-label">连接中...</span>
+    </div>
+    <div style="font-family:var(--mono);font-size:11px;color:var(--text2)" id="clock"></div>
+  </div>
+</header>
+
+<div class="container">
+  <!-- Main panel -->
+  <div class="main-panel">
+    <div class="stats-bar">
+      <div class="sb-item"><div class="sb-lbl">监控代币</div><div class="sb-val" id="stat-tokens">0</div></div>
+      <div class="sb-item"><div class="sb-lbl">持仓</div><div class="sb-val" style="color:var(--green)" id="stat-positions">0</div></div>
+      <div class="sb-item"><div class="sb-lbl">买入</div><div class="sb-val" style="color:var(--green)" id="stat-buys">0</div></div>
+      <div class="sb-item"><div class="sb-lbl">卖出</div><div class="sb-val" style="color:var(--red)" id="stat-sells">0</div></div>
+    </div>
+
+    <div class="section-header">
+      <span class="section-title">监控白名单 <span class="badge" id="token-count-badge">0</span></span>
+      <span style="font-family:var(--mono);font-size:9px;color:var(--text3)">
+        15s K线 · 5s轮询 · 收录即买(0.5 SOL) · EMA9下穿EMA20死叉清仓 · 30min监控期
+      </span>
+    </div>
+
+    <div id="tokens-container">
+      <div class="empty-state">
+        <div class="icon">◎</div>
+        <p>等待代币加入白名单<br/>
+        <code style="color:var(--cyan);font-size:10px">POST /webhook/add-token</code></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Side panel -->
+  <div class="side-panel">
+    <div class="side-section" style="flex:1">
+      <div class="section-header">
+        <span class="section-title">交易记录</span>
+        <span class="badge" id="trade-count-badge">0</span>
+      </div>
+      <div id="trade-log">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--text3);text-align:center;padding:24px 0">暂无交易记录</div>
+      </div>
+    </div>
+
+    <div class="side-section">
+      <div class="section-header"><span class="section-title">策略配置</span></div>
+      <div class="config-grid">
+        <div class="cfg-item"><div class="cfg-label">K线周期</div><div class="cfg-value">15s</div></div>
+        <div class="cfg-item"><div class="cfg-label">轮询间隔</div><div class="cfg-value">5s</div></div>
+        <div class="cfg-item"><div class="cfg-label">EMA快线</div><div class="cfg-value">EMA9</div></div>
+        <div class="cfg-item"><div class="cfg-label">EMA慢线</div><div class="cfg-value">EMA20</div></div>
+        <div class="cfg-item"><div class="cfg-label">监控期</div><div class="cfg-value">30min</div></div>
+        <div class="cfg-item"><div class="cfg-label">运行时间</div><div class="cfg-value" id="cfg-uptime">0s</div></div>
+      </div>
+      <div style="margin-top:10px;background:var(--bg3);border:1px solid var(--border);border-radius:4px;padding:9px 11px">
+        <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;letter-spacing:.1em;margin-bottom:5px">出场策略</div>
+        <div style="font-size:11px;color:var(--text2);line-height:1.9">
+          1️⃣ EMA9 下穿 EMA20 → 死叉立即清仓<br/>
+          2️⃣ 监控30分钟到期 → 清仓退出
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script>
+// ================================================================
+const WS_URL = `ws://${location.host}/ws`;
+let ws, reconnectTimer;
+let tokenData  = {};
+let tradeData  = [];
+let sessionBuys = 0, sessionSells = 0;
+
+setInterval(() => {
+  document.getElementById('clock').textContent =
+    new Date().toLocaleTimeString('zh-CN', { hour12: false });
+}, 1000);
+
+function connectWS() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen  = () => setDot('connected', '已连接');
+  ws.onclose = () => { setDot('', '断线中...'); reconnectTimer = setTimeout(connectWS, 3000); };
+  ws.onerror = () => setDot('error', '连接错误');
+  ws.onmessage = (ev) => { try { handleMsg(JSON.parse(ev.data)); } catch(e){} };
+}
+
+function setDot(cls, lbl) {
+  document.getElementById('ws-dot').className = 'ws-dot' + (cls ? ' '+cls : '');
+  document.getElementById('ws-label').textContent = lbl;
+}
+
+function handleMsg(msg) {
+  switch(msg.type) {
+    case 'snapshot':
+      tokenData = {};
+      tradeData = msg.data.tradeLog || [];
+      (msg.data.tokens || []).forEach(t => tokenData[t.address] = t);
+      sessionBuys     = tradeData.filter(t => t.type === 'BUY').length;
+      sessionSells    = tradeData.filter(t => t.type === 'SELL' || t.type === 'EXIT').length;
+      renderAll(); updateStats(); updateUptime(msg.data.uptime);
+      break;
+    case 'update':
+      if(msg.data.tokens) { tokenData = {}; msg.data.tokens.forEach(t => tokenData[t.address]=t); }
+      if(msg.data.tradeLog) tradeData = msg.data.tradeLog;
+      renderAll(); updateStats(); updateUptime(msg.data.uptime);
+      break;
+    case 'token_added':
+      tokenData[msg.data.address] = msg.data;
+      renderAll(); updateStats();
+      toast(`✅ 新代币: ${msg.data.symbol}`, 'info');
+      break;
+    case 'token_removed':
+      delete tokenData[msg.data.address];
+      document.querySelector(`.token-card[data-address="${msg.data.address}"]`)?.remove();
+      updateStats();
+      if(!Object.keys(tokenData).length) renderAll();
+      break;
+    case 'trade_log':
+      const d = msg.data;
+      tradeData.unshift(d);
+      if(d.type === 'BUY')          { sessionBuys++; toast(`🟢 买入: ${d.symbol}`, 'buy'); }
+      else if(d.type === 'SELL' || d.type === 'EXIT') { sessionSells++; toast(`🔴 卖出: ${d.symbol} — ${d.reason||''}`, 'sell'); }
+      prependTradeEntry(d);
+      document.getElementById('trade-count-badge').textContent = tradeData.length;
+      updateStats();
+      break;
+  }
+}
+
+function renderAll() {
+  const container = document.getElementById('tokens-container');
+  const tokens = Object.values(tokenData);
+  document.getElementById('token-count-badge').textContent = tokens.length;
+  if(!tokens.length) {
+    container.innerHTML = `<div class="empty-state"><div class="icon">◎</div><p>等待代币加入白名单<br/><code style="color:var(--cyan);font-size:10px">POST /webhook/add-token</code></p></div>`;
+    return;
+  }
+  tokens.forEach(t => upsertCard(t));
+  container.querySelectorAll('.token-card').forEach(c => {
+    if(!tokenData[c.dataset.address]) c.remove();
+  });
+  container.querySelector('.empty-state')?.remove();
+
+  // render trade log
+  const log = document.getElementById('trade-log');
+  if(!tradeData.length) {
+    log.innerHTML = `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);text-align:center;padding:24px 0">暂无交易记录</div>`;
+    document.getElementById('trade-count-badge').textContent = '0';
+    return;
+  }
+  log.innerHTML = tradeData.slice(0,80).map(tradeEntryHTML).join('');
+  document.getElementById('trade-count-badge').textContent = tradeData.length;
+}
+
+function upsertCard(t) {
+  const container = document.getElementById('tokens-container');
+  let card = container.querySelector(`.token-card[data-address="${t.address}"]`);
+  if(!card) {
+    card = document.createElement('div');
+    card.className = 'token-card';
+    card.dataset.address = t.address;
+    container.insertBefore(card, container.firstChild);
+  }
+
+  const pnl    = parseFloat(t.pnlPct) || 0;
+  const pnlStr = (t.pnlPct != null && t.inPosition) ? (pnl>0?'+':'')+t.pnlPct+'%' : '—';
+  const pnlCls = pnl>0?'pos':pnl<0?'neg':'';
+  const e9  = t.ema9  != null ? (+t.ema9).toExponential(3)  : '—';
+  const e20 = t.ema20 != null ? (+t.ema20).toExponential(3) : '—';
+  const pr  = t.currentPrice ? t.currentPrice.toExponential(4) : '—';
+  const ag  = t.age ? t.age+'m' : '—';
+  const lp  = t.lp  ? '$'+fmt(t.lp)  : '—';
+  const fdv = t.fdv ? '$'+fmt(t.fdv) : '—';
+  const sa  = t.address.slice(0,6)+'...'+t.address.slice(-4);
+  const gmgn = `https://gmgn.ai/sol/token/${t.address}`;
+
+  let crossLbl='',crossCls='neutral';
+  if(t.ema9!=null&&t.ema20!=null) {
+    if(+t.ema9>+t.ema20){crossLbl='EMA9>EMA20↑';crossCls='bullish';}
+    else {crossLbl='EMA9<EMA20↓';crossCls='bearish';}
+  }
+
+  let cardState='watching';
+  if(!t.bought) cardState='pending';
+  else if(t.inPosition) cardState='in-position';
+  else if(t.lastSignal==='SELL') cardState='sold';
+
+  let sigBadge='WATCHING', sigLbl='WATCHING';
+  if(!t.bought){sigBadge='PENDING';sigLbl='BUYING...';}
+  else if(t.inPosition){sigBadge='BUY';sigLbl='IN POSITION';}
+  else if(t.lastSignal==='SELL'){sigBadge='SELL';sigLbl='SOLD';}
+
+  // Exit strategy indicator (EMA death cross only)
+  const exitHTML = `<div class="tp-bar">
+    <div class="tp-bar-label">出场策略：EMA9 下穿 EMA20 死叉立即卖出</div>
+  </div>`;
+
+  card.className = `token-card ${cardState}`;
+  card.innerHTML = `
+    <div class="card-header">
+      <div class="token-info">
+        <span class="token-symbol">${t.symbol}</span>
+        <a class="token-address" href="${gmgn}" target="_blank">${sa} ↗</a>
+      </div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <span class="sig-badge ${sigBadge}">${sigLbl}</span>
+        <button class="btn-remove" onclick="manualRemove('${t.address}','${t.symbol}')">✕</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="metric"><div class="metric-label">Price</div><div class="metric-value yellow">${pr}</div></div>
+      <div class="metric"><div class="metric-label">浮动盈亏</div><div class="metric-value ${pnlCls}">${pnlStr}</div></div>
+      <div class="metric"><div class="metric-label">FDV</div><div class="metric-value">${fdv}</div></div>
+      <div class="metric"><div class="metric-label">LP</div><div class="metric-value">${lp}</div></div>
+      <div class="metric"><div class="metric-label">Age</div><div class="metric-value">${ag}</div></div>
+      <div class="metric"><div class="metric-label">K线数</div><div class="metric-value cyan">${t.candleCount||0}</div></div>
+    </div>
+    <div class="card-ema">
+      <div class="ema-item"><span class="ema-label">EMA9</span><span class="ema-val fast">${e9}</span></div>
+      <div class="ema-item"><span class="ema-label">EMA20</span><span class="ema-val slow">${e20}</span></div>
+      ${t.entryPrice ? `<div class="ema-item"><span class="ema-label">入场</span><span class="ema-val" style="color:var(--purple)">${(+t.entryPrice).toExponential(4)}</span></div>` : ''}
+      ${t.peakPrice  ? `<div class="ema-item"><span class="ema-label">峰值</span><span class="ema-val" style="color:var(--orange)">${(+t.peakPrice).toExponential(4)}</span></div>` : ''}
+      <div class="ema-cross ${crossCls}">${crossLbl||'WARMING UP'}</div>
+    </div>
+    ${t.inPosition ? exitHTML : ''}
+    <div class="position-bar">
+      <span class="pos-indicator ${t.inPosition?'holding':'flat'}">${t.inPosition?'● 持仓中':'○ 空仓'}</span>
+      ${t.tokenBalance>0?`<span style="color:var(--text2)">余额 <span style="color:var(--green)">${t.tokenBalance}</span></span>`:''}
+    </div>
+    ${renderMiniChart(t)}
+  `;
+}
+
+function renderMiniChart(t) {
+  const c = t.recentCandles;
+  if(!c||c.length<2) return '';
+  const W=400,H=36;
+  const prices=c.flatMap(x=>[x.open,x.high,x.low,x.close]);
+  const mn=Math.min(...prices),mx=Math.max(...prices),range=mx-mn||1;
+  const cw=W/c.length;
+  let svg='';
+  c.forEach((x,i)=>{
+    const bull=x.close>=x.open,col=bull?'var(--green)':'var(--red)',px=i*cw;
+    const bt=H-((Math.max(x.open,x.close)-mn)/range)*H;
+    const bb=H-((Math.min(x.open,x.close)-mn)/range)*H;
+    const bh=Math.max(1,bb-bt);
+    const wt=H-((x.high-mn)/range)*H;
+    const wb=H-((x.low-mn)/range)*H;
+    svg+=`<line x1="${px+cw/2}" y1="${wt}" x2="${px+cw/2}" y2="${wb}" stroke="${col}" stroke-width="0.6" opacity=".5"/>`;
+    svg+=`<rect x="${px+0.5}" y="${bt}" width="${Math.max(1,cw-1)}" height="${bh}" fill="${col}" opacity=".75"/>`;
+  });
+  return `<div class="card-chart"><div class="chart-label">K线 (最近${c.length}根 · 15s)</div><div class="mini-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${svg}</svg></div></div>`;
+}
+
+function tradeEntryHTML(d) {
+  const t = new Date(d.time).toLocaleTimeString('zh-CN',{hour12:false});
+  const typeLabel = {BUY:'买入',SELL:'清仓',EXIT:'退出'}[d.type]||d.type;
+  return `<div class="trade-entry">
+    <span class="te-type ${d.type}">${typeLabel}</span>
+    <div class="te-info">
+      <span class="te-symbol">${d.symbol}</span>
+      <span class="te-reason">${d.reason||'—'}</span>
+    </div>
+    <span class="te-time">${t}</span>
+  </div>`;
+}
+
+function prependTradeEntry(d) {
+  const log = document.getElementById('trade-log');
+  const placeholder = log.querySelector('[data-placeholder]');
+  if(placeholder) placeholder.remove();
+  const el = document.createElement('div');
+  el.innerHTML = tradeEntryHTML(d);
+  log.insertBefore(el.firstChild, log.firstChild);
+}
+
+function updateStats() {
+  const positions = Object.values(tokenData).filter(t=>t.inPosition).length;
+  document.getElementById('stat-tokens').textContent    = Object.keys(tokenData).length;
+  document.getElementById('token-count-badge').textContent = Object.keys(tokenData).length;
+  document.getElementById('stat-positions').textContent = positions;
+  document.getElementById('stat-buys').textContent      = sessionBuys;
+  document.getElementById('stat-sells').textContent     = sessionSells;
+}
+
+function updateUptime(s) {
+  const h=Math.floor(s/3600),m=Math.floor((s%3600)/60),ss=Math.floor(s%60);
+  document.getElementById('cfg-uptime').textContent = h?`${h}h${m}m`:`${m}m${ss}s`;
+}
+
+async function manualRemove(address, symbol) {
+  if(!confirm(`手动移除 ${symbol}？\n如有持仓将自动执行卖出。`)) return;
+  try {
+    const r = await fetch(`/api/tokens/${address}`,{method:'DELETE'});
+    const d = await r.json();
+    if(d.ok) toast(`已移除 ${symbol}`,'info');
+    else toast('移除失败: '+(d.error||'unknown'),'sell');
+  } catch(e) { toast('网络错误','sell'); }
+}
+
+function fmt(n) {
+  if(n>=1e9) return (n/1e9).toFixed(2)+'B';
+  if(n>=1e6) return (n/1e6).toFixed(2)+'M';
+  if(n>=1e3) return (n/1e3).toFixed(1)+'K';
+  return n.toFixed(0);
+}
+
+function toast(msg, type='info') {
+  const c=document.getElementById('toast-container');
+  const el=document.createElement('div');
+  el.className=`toast ${type}`;el.textContent=msg;
+  c.appendChild(el);
+  setTimeout(()=>{el.style.animation='toastOut .25s ease forwards';setTimeout(()=>el.remove(),300);},4000);
+}
+
+connectWS();
+</script>
+</body>
+</html>
