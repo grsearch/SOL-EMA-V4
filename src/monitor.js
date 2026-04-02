@@ -5,7 +5,7 @@
 //   条件不满足 → 静默拒绝，不再跟踪
 //
 // 出场策略（纯 EMA 死叉）：
-//   1. EMA死叉   EMA9 下穿 EMA20 立即卖出（15秒K线，5秒轮询）
+//   1. EMA死叉   EMA9 < EMA20 立即卖出（15秒K线，1秒轮询）
 //   2. 监控到期  30分钟后清仓退出
 //
 // 已删除：硬止损、浮动止盈、分批止盈
@@ -18,13 +18,13 @@ const trader                           = require('./trader');
 const { broadcastToClients }           = require('./wsHub');
 const logger                           = require('./logger');
 
-const PRICE_POLL_SEC     = parseInt(process.env.PRICE_POLL_SEC        || '5');   // 5秒价格轮询
+const PRICE_POLL_SEC     = parseInt(process.env.PRICE_POLL_SEC        || '1');   // 1秒价格轮询
 const KLINE_INTERVAL_SEC = parseInt(process.env.KLINE_INTERVAL_SEC    || '15');  // 15秒K线
 const TOKEN_MAX_AGE_MIN  = parseInt(process.env.TOKEN_MAX_AGE_MINUTES || '30');  // 30分钟监控期
 const FDV_MIN_USD        = parseInt(process.env.FDV_MIN_USD           || '15000');
 const FDV_MAX_USD        = parseInt(process.env.FDV_MAX_USD           || '60000');
 const LP_MIN_USD         = parseInt(process.env.LP_MIN_USD            || '5000');
-const MAX_TICKS_HISTORY  = 60 * 60 * 1;  // 1h × 12 ticks/min (5s poll) = 720 ticks max
+const MAX_TICKS_HISTORY  = 60 * 60 * 1;  // 1h × 60 ticks/min (1s poll) = 3600 ticks max
 
 class TokenMonitor {
   static instance = null;
@@ -72,6 +72,9 @@ class TokenMonitor {
       // Position tracking (null = no open position)
       position:     null,
       pnlPct:       null,
+      // EMA warmup tracking
+      _candlesSinceBuy: 0,
+      _lastCandleCount: 0,
       // Lifecycle flags
       bought:       false,
       exitSent:     false,
@@ -201,9 +204,9 @@ class TokenMonitor {
     logger.info('[Monitor] Stopped');
   }
 
-  // ── 价格轮询 + EMA死叉评估 每 PRICE_POLL_SEC (5s) ──────────
+  // ── 价格轮询 + EMA死叉评估 每 PRICE_POLL_SEC (1s) ──────────
   //
-  // 每5秒拉一次价格，聚合成15秒K线，检查 EMA9/EMA20 死叉
+  // 每1秒拉一次价格，聚合成15秒K线，检查 EMA9 < EMA20 死叉
   // 已删除：硬止损、浮动止盈、分批止盈（全部由 EMA 死叉统一处理）
   async _pollAndEvaluate() {
     for (const [addr, state] of this.tokens.entries()) {
@@ -230,17 +233,39 @@ class TokenMonitor {
 
         // ── EMA 死叉评估 ──────────────────────────────────────
         if (state.inPosition && state.ticks.length >= 2) {
+          // 用全部K线（含当前未收盘的），实时反应价格变动
           state.candles = buildCandles(state.ticks, KLINE_INTERVAL_SEC);
-          const closedCandles = state.candles.length > 1
-            ? state.candles.slice(0, -1)
-            : state.candles;
 
-          const result = evaluateSignal(closedCandles, state);
+          // 追踪买入后经过了多少根K线（用于预热保护）
+          const currentCandleCount = state.candles.length;
+          if (currentCandleCount > state._lastCandleCount) {
+            state._candlesSinceBuy += (currentCandleCount - state._lastCandleCount);
+            state._lastCandleCount = currentCandleCount;
+          }
+
+          const result = evaluateSignal(state.candles, state);
           state.ema9   = result.ema9;
           state.ema20  = result.ema20;
 
+          // 调试日志：每次评估都打印
+          if (!isNaN(result.ema9) && !isNaN(result.ema20)) {
+            const gap = ((result.ema9 - result.ema20) / result.ema20 * 100).toFixed(3);
+            logger.info(
+              `[EMA] ${state.symbol}` +
+              ` | candles=${currentCandleCount}` +
+              ` | warmup=${state._candlesSinceBuy}` +
+              ` | EMA9=${result.ema9.toExponential(4)}` +
+              ` | EMA20=${result.ema20.toExponential(4)}` +
+              ` | gap=${gap}%` +
+              ` | signal=${result.signal || 'HOLD'}` +
+              ` | ${result.reason}`
+            );
+          } else {
+            logger.info(`[EMA] ${state.symbol} | ${result.reason}`);
+          }
+
           if (result.signal === 'SELL') {
-            logger.warn(`[Strategy] EMA死叉 SELL ${state.symbol} — ${result.reason}`);
+            logger.warn(`[Strategy] ⚡ EMA死叉 SELL ${state.symbol} — ${result.reason}`);
             await this._doExit(state, result.reason);
           }
         }

@@ -4,11 +4,15 @@
 // Price poll  : PRICE_POLL_SEC     (default 5  = 5秒轮询)
 //
 // BUY  : 收录即买，由 monitor._fetchMetaAndBuy() 直接执行，本模块不处理
-// SELL : EMA9 下穿 EMA20 立即卖出（无需斜率确认，无需连续K线确认）
+// SELL : EMA9 < EMA20 立即卖出（不要求"穿越"动作，只要在下方就卖）
 
 const EMA_FAST  = parseInt(process.env.EMA_FAST           || '9');
 const EMA_SLOW  = parseInt(process.env.EMA_SLOW           || '20');
 const KLINE_SEC = parseInt(process.env.KLINE_INTERVAL_SEC || '15');
+
+// EMA 预热保护：买入后至少等待这么多根K线再开始判断死叉
+// 防止刚买入时 EMA 尚未稳定就误判
+const WARMUP_CANDLES = parseInt(process.env.EMA_WARMUP_CANDLES || '5');
 
 /**
  * Calculate EMA array for a price series (oldest-first).
@@ -34,13 +38,14 @@ function calcEMA(closes, period) {
 }
 
 /**
- * Evaluate SELL signal from closed candles.
+ * Evaluate SELL signal from candles (including current unfinished candle).
  * BUY is handled upstream (收录即买)，本函数只判断死叉出场。
  *
- * SELL条件：EMA9 下穿 EMA20（死叉），立即触发
- *   - 上一根K线 EMA9 >= EMA20
- *   - 当前K线   EMA9 <  EMA20
- *   → 无需 EMA20 斜率向下，无需连续确认
+ * SELL条件：EMA9 < EMA20 → 立即卖出
+ *   - 不要求"穿越"动作（不要求上一根 EMA9 >= EMA20）
+ *   - 只要当前 EMA9 低于 EMA20 就立即触发
+ *   - 内置预热保护：K线数不足 EMA_SLOW 时返回 warming_up
+ *   - 买入后前 WARMUP_CANDLES 根K线不触发（等 EMA 稳定）
  *
  * Returns: { ema9, ema20, signal: null|'SELL', reason }
  */
@@ -50,27 +55,33 @@ function evaluateSignal(candles, tokenState) {
   const ema20s = calcEMA(closes, EMA_SLOW);
   const len    = closes.length;
 
-  if (len < EMA_SLOW + 1) {
-    return { ema9: NaN, ema20: NaN, signal: null, reason: 'warming_up' };
+  // EMA20 至少需要 EMA_SLOW 根K线才能计算出第一个值
+  if (len < EMA_SLOW) {
+    return { ema9: NaN, ema20: NaN, signal: null, reason: `warming_up(${len}/${EMA_SLOW})` };
   }
 
-  const ema9_now   = ema9s[len - 1];
-  const ema20_now  = ema20s[len - 1];
-  const ema9_prev  = ema9s[len - 2];
-  const ema20_prev = ema20s[len - 2];
+  const ema9_now  = ema9s[len - 1];
+  const ema20_now = ema20s[len - 1];
 
-  if (isNaN(ema9_now) || isNaN(ema20_now) || isNaN(ema9_prev) || isNaN(ema20_prev)) {
+  if (isNaN(ema9_now) || isNaN(ema20_now)) {
     return { ema9: NaN, ema20: NaN, signal: null, reason: 'ema_nan' };
   }
 
-  // 死叉判断：上一根K线 EMA9 >= EMA20，当前K线 EMA9 < EMA20 → 立即卖出
-  const wasAbove = ema9_prev >= ema20_prev;
-  const nowBelow = ema9_now  <  ema20_now;
+  // 预热保护：买入后前几根K线不触发，等 EMA 值稳定
+  // candlesSinceBuy 由 monitor 设置
+  const candlesSinceBuy = tokenState._candlesSinceBuy || 0;
+  if (candlesSinceBuy < WARMUP_CANDLES) {
+    return {
+      ema9: ema9_now, ema20: ema20_now, signal: null,
+      reason: `warmup(${candlesSinceBuy}/${WARMUP_CANDLES})`,
+    };
+  }
 
-  if (wasAbove && nowBelow) {
+  // 死叉判断：EMA9 < EMA20 → 立即卖出
+  if (ema9_now < ema20_now) {
     return {
       ema9: ema9_now, ema20: ema20_now, signal: 'SELL',
-      reason: `EMA${EMA_FAST}下穿EMA${EMA_SLOW}_死叉立即卖出`,
+      reason: `EMA${EMA_FAST}(${ema9_now.toExponential(3)})<EMA${EMA_SLOW}(${ema20_now.toExponential(3)})_死叉卖出`,
     };
   }
 
@@ -126,4 +137,4 @@ function buildCandles(ticks, intervalSec = KLINE_SEC) {
   return candles;
 }
 
-module.exports = { calcEMA, evaluateSignal, buildCandles, EMA_FAST, EMA_SLOW };
+module.exports = { calcEMA, evaluateSignal, buildCandles, EMA_FAST, EMA_SLOW, WARMUP_CANDLES };

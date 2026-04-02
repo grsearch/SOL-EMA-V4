@@ -57,7 +57,7 @@ echo "[5/5] Writing hardened systemd service..."
 UNIT_FILE="/tmp/${SERVICE_NAME}.service"
 
 printf '[Unit]\n' > "$UNIT_FILE"
-printf 'Description=SOL EMA Monitor v2 — Jupiter Trading Bot\n' >> "$UNIT_FILE"
+printf 'Description=SOL EMA Monitor v2 — EMA9/EMA20 Death Cross · 15sK · 1sPoll · 30min\n' >> "$UNIT_FILE"
 printf 'After=network-online.target\n' >> "$UNIT_FILE"
 printf 'Wants=network-online.target\n' >> "$UNIT_FILE"
 printf '\n' >> "$UNIT_FILE"
