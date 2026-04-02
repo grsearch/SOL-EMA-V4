@@ -4,7 +4,7 @@
 // Price poll  : PRICE_POLL_SEC     (default 5  = 5秒轮询)
 //
 // BUY  : 收录即买，由 monitor._fetchMetaAndBuy() 直接执行，本模块不处理
-// SELL : EMA9 < EMA20 立即卖出（不要求"穿越"动作，只要在下方就卖）
+// SELL : EMA9 下穿 EMA20 立即卖出（上一根K线EMA9>=EMA20，当前EMA9<EMA20）
 
 const EMA_FAST  = parseInt(process.env.EMA_FAST           || '9');
 const EMA_SLOW  = parseInt(process.env.EMA_SLOW           || '20');
@@ -41,11 +41,10 @@ function calcEMA(closes, period) {
  * Evaluate SELL signal from candles (including current unfinished candle).
  * BUY is handled upstream (收录即买)，本函数只判断死叉出场。
  *
- * SELL条件：EMA9 < EMA20 → 立即卖出
- *   - 不要求"穿越"动作（不要求上一根 EMA9 >= EMA20）
- *   - 只要当前 EMA9 低于 EMA20 就立即触发
- *   - 内置预热保护：K线数不足 EMA_SLOW 时返回 warming_up
- *   - 买入后前 WARMUP_CANDLES 根K线不触发（等 EMA 稳定）
+ * SELL条件：EMA9 下穿 EMA20（死叉），立即触发
+ *   - 上一根K线 EMA9 >= EMA20（在上方或相交）
+ *   - 当前K线   EMA9 <  EMA20（穿到下方）
+ *   - 内置预热保护：买入后前 WARMUP_CANDLES 根K线不触发
  *
  * Returns: { ema9, ema20, signal: null|'SELL', reason }
  */
@@ -55,15 +54,17 @@ function evaluateSignal(candles, tokenState) {
   const ema20s = calcEMA(closes, EMA_SLOW);
   const len    = closes.length;
 
-  // EMA20 至少需要 EMA_SLOW 根K线才能计算出第一个值
-  if (len < EMA_SLOW) {
-    return { ema9: NaN, ema20: NaN, signal: null, reason: `warming_up(${len}/${EMA_SLOW})` };
+  // EMA20 至少需要 EMA_SLOW+1 根K线（当前+上一根都有有效值才能比较）
+  if (len < EMA_SLOW + 1) {
+    return { ema9: NaN, ema20: NaN, signal: null, reason: `warming_up(${len}/${EMA_SLOW + 1})` };
   }
 
-  const ema9_now  = ema9s[len - 1];
-  const ema20_now = ema20s[len - 1];
+  const ema9_now   = ema9s[len - 1];
+  const ema20_now  = ema20s[len - 1];
+  const ema9_prev  = ema9s[len - 2];
+  const ema20_prev = ema20s[len - 2];
 
-  if (isNaN(ema9_now) || isNaN(ema20_now)) {
+  if (isNaN(ema9_now) || isNaN(ema20_now) || isNaN(ema9_prev) || isNaN(ema20_prev)) {
     return { ema9: NaN, ema20: NaN, signal: null, reason: 'ema_nan' };
   }
 
@@ -77,11 +78,16 @@ function evaluateSignal(candles, tokenState) {
     };
   }
 
-  // 死叉判断：EMA9 < EMA20 → 立即卖出
-  if (ema9_now < ema20_now) {
+  // 死叉判断：EMA9 从上方穿越到下方（下穿）→ 立即卖出
+  //   上一根K线 EMA9 >= EMA20（在上方或相交）
+  //   当前K线   EMA9 <  EMA20（穿到下方）
+  const wasAboveOrEqual = ema9_prev >= ema20_prev;
+  const nowBelow        = ema9_now  <  ema20_now;
+
+  if (wasAboveOrEqual && nowBelow) {
     return {
       ema9: ema9_now, ema20: ema20_now, signal: 'SELL',
-      reason: `EMA${EMA_FAST}(${ema9_now.toExponential(3)})<EMA${EMA_SLOW}(${ema20_now.toExponential(3)})_死叉卖出`,
+      reason: `EMA${EMA_FAST}下穿EMA${EMA_SLOW}_死叉卖出`,
     };
   }
 

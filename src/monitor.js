@@ -13,7 +13,7 @@
 'use strict';
 
 const birdeye                          = require('./birdeye');
-const { evaluateSignal, buildCandles } = require('./ema');
+const { evaluateSignal, buildCandles, EMA_SLOW, WARMUP_CANDLES } = require('./ema');
 const trader                           = require('./trader');
 const { broadcastToClients }           = require('./wsHub');
 const logger                           = require('./logger');
@@ -145,6 +145,25 @@ class TokenMonitor {
       state.inPosition = true;
       state.bought     = true;
       state.lastSignal = 'BUY';
+
+      // ── 种子K线：用买入价回填历史K线，让EMA立即可用 ──────────
+      // EMA20 需要 21 根K线才能计算。买入时用 entryPrice 填充前 EMA_SLOW+WARMUP 根K线，
+      // 这样第一根真实K线收盘后就能开始死叉判断，不用再等5分钟。
+      // 种子K线全部相同价格 → EMA9 = EMA20 = entryPrice，不会误触发
+      const seedPrice = pos.entryPriceUsd;
+      const seedCount = EMA_SLOW + WARMUP_CANDLES + 2;  // 多填几根确保充足
+      const now = Date.now();
+      for (let i = seedCount; i >= 1; i--) {
+        state.ticks.push({
+          time:  now - i * KLINE_INTERVAL_SEC * 1000,
+          price: seedPrice,
+        });
+      }
+      // 预热计数器直接跳过预热期（种子K线已经提供了足够的历史）
+      state._candlesSinceBuy = WARMUP_CANDLES;
+      state._lastCandleCount = 0;
+      logger.info(`[Monitor] 🌱 Seeded ${seedCount} ticks @ ${seedPrice} for ${state.symbol} — EMA ready immediately`);
+
       this._addTradeLog({ type: 'BUY', symbol: state.symbol, reason: 'WHITELIST_IMMEDIATE' });
 
       // 创建24h交易记录
