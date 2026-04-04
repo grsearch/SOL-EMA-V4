@@ -34,4 +34,27 @@ async function getTokenOverview(address) {
   }
 }
 
-module.exports = { getPrice, getTokenOverview };
+/**
+ * 获取最近 N 笔交易记录，用于 RUG 检测
+ * 返回格式：[{ side: 'sell'|'buy', amountUsd: number, gasFee: number, wallet: string, time: number }]
+ */
+async function getTrades(address, limit = 30) {
+  try {
+    const { data } = await client.get('/defi/txs/token', {
+      params: { address, limit, tx_type: 'swap' },
+    });
+    const list = data?.data?.items ?? [];
+    return list.map(tx => ({
+      side:      tx.side === 'sell' ? 'sell' : 'buy',
+      amountUsd: tx.volumeUsd ?? 0,
+      gasFee:    tx.fee ?? 0,
+      wallet:    tx.owner ?? tx.source ?? '',
+      time:      tx.blockUnixTime ?? 0,
+    }));
+  } catch (e) {
+    logger.warn(`[Birdeye] getTrades ${address.slice(0, 8)}: ${e.message}`);
+    return [];
+  }
+}
+
+module.exports = { getPrice, getTokenOverview, getTrades };
