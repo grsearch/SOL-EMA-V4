@@ -1,22 +1,21 @@
 // src/ema.js — EMA calculation + SELL signal logic
 //
 // ═══════════════════════════════════════════════════════════════
-//  SELL 策略（V5 修改版）：EMA9 向下收窄 + 交叉瞬间立即卖出
+//  SELL 策略（V5.1）：死叉瞬间立即卖出
 // ═══════════════════════════════════════════════════════════════
 //
-//  触发条件（三个同时成立，立即卖出，不等确认）：
-//    1. EMA9 正在向下运动        (ema9_now < ema9_prev)
-//    2. EMA9 与 EMA20 差距收窄  (|ema9_now - ema20_now| < |ema9_prev - ema20_prev|)
-//    3. EMA9 从上方穿越 EMA20   (ema9_prev >= ema20_prev  AND  ema9_now < ema20_now)
+//  触发条件（满足即立即卖出，0延迟，0确认）：
 //
-//  核心改变：
-//    - 原逻辑：等死叉后再连续2次确认 → 太晚
-//    - 新逻辑：死叉发生的那根K线，同时满足"向下+收窄"，立即触发
-//    - CONFIRM_BARS 不再用于主卖出信号，保留用于"保底死叉"兜底逻辑
+//    EMA9 从上方穿越 EMA20 的那一根K线：
+//      ema9_prev >= ema20_prev  AND  ema9_now < ema20_now
+//
+//  为什么去掉"收窄"条件：
+//    价格急速下跌时 EMA9 大步穿越 EMA20，差距不一定收窄，
+//    加了收窄反而漏掉最佳出场点。
 //
 //  兜底逻辑（保险）：
-//    若主信号因某种原因未触发，EMA9 < EMA20 且 EMA20 斜率向下
-//    连续 CONFIRM_BARS 次仍可触发卖出，防止漏单。
+//    若穿越时 EMA9 已经在 EMA20 下方（极端行情下已错过交叉），
+//    EMA9 < EMA20 且 EMA20 斜率向下，连续 CONFIRM_BARS 次 → 卖出。
 
 const EMA_FAST       = parseInt(process.env.EMA_FAST           || '9');
 const EMA_SLOW       = parseInt(process.env.EMA_SLOW           || '20');
@@ -25,7 +24,6 @@ const KLINE_INTERVAL = parseInt(process.env.KLINE_INTERVAL_SEC || '15');
 
 /**
  * Calculate EMA array for a price series (oldest-first).
- * Seeded with SMA for the first window, then standard EMA formula.
  */
 function calcEMA(closes, period) {
   const k      = 2 / (period + 1);
@@ -49,12 +47,10 @@ function calcEMA(closes, period) {
 /**
  * Evaluate whether a SELL signal should fire.
  *
- * tokenState.bearishCount is the only mutable field touched here.
+ * ─── 主卖出信号（优先，0延迟）────────────────────────────────
+ *  EMA9 从上方穿越 EMA20 的那根K线 → 立即卖出
  *
- * ─── 主卖出信号（优先）────────────────────────────────────────
- *  EMA9 向下 + 差距收窄 + 交叉瞬间 → 立即卖出（0确认延迟）
- *
- * ─── 兜底信号（保险）─────────────────────────────────────────
+ * ─── 兜底信号────────────────────────────────────────────────
  *  EMA9 < EMA20 且 EMA20 斜率向下，连续 CONFIRM_BARS 次 → 卖出
  */
 function evaluateSignal(candles, tokenState) {
@@ -63,7 +59,6 @@ function evaluateSignal(candles, tokenState) {
   const ema20s = calcEMA(closes, EMA_SLOW);
   const len    = closes.length;
 
-  // Need at least EMA_SLOW+1 bars: EMA_SLOW to compute EMA20, +1 to compare prev
   if (len < EMA_SLOW + 1) {
     tokenState.bearishCount = 0;
     return { ema9: NaN, ema20: NaN, signal: null, reason: `warming_up(${len}/${EMA_SLOW + 1})` };
@@ -79,24 +74,21 @@ function evaluateSignal(candles, tokenState) {
     return { ema9: NaN, ema20: NaN, signal: null, reason: 'ema_nan' };
   }
 
-  // ─── 主信号：EMA9向下 + 差距收窄 + 交叉瞬间 ─────────────────
-  const ema9_falling   = ema9_now < ema9_prev;
-  const gap_now        = Math.abs(ema9_now  - ema20_now);
-  const gap_prev       = Math.abs(ema9_prev - ema20_prev);
-  const gap_narrowing  = gap_now < gap_prev;
-  const crossunder     = ema9_prev >= ema20_prev && ema9_now < ema20_now; // 从上方穿越到下方
+  // ─── 主信号：死叉瞬间（上穿变下穿）立即卖出 ─────────────────
+  //  上一根K线结束时 EMA9 >= EMA20，这根K线结束时 EMA9 < EMA20
+  const crossunder = ema9_prev >= ema20_prev && ema9_now < ema20_now;
 
-  if (ema9_falling && gap_narrowing && crossunder) {
-    tokenState.bearishCount = 0; // 重置兜底计数器
+  if (crossunder) {
+    tokenState.bearishCount = 0;
     return {
       ema9:   ema9_now,
       ema20:  ema20_now,
       signal: 'SELL',
-      reason: `EMA9↓收窄交叉 gap=${gap_now.toExponential(2)} prev=${gap_prev.toExponential(2)}`,
+      reason: `死叉瞬间 EMA9穿越 prev(${ema9_prev.toFixed(0)}>=${ema20_prev.toFixed(0)}) now(${ema9_now.toFixed(0)}<${ema20_now.toFixed(0)})`,
     };
   }
 
-  // ─── 兜底信号：经典死叉 + EMA20下行 × CONFIRM_BARS ──────────
+  // ─── 兜底信号：EMA9已在下方 + EMA20下行 × CONFIRM_BARS ──────
   const bearish   = ema9_now < ema20_now;
   const declining = ema20_now < ema20_prev;
 
@@ -120,7 +112,6 @@ function evaluateSignal(candles, tokenState) {
 
 /**
  * Aggregate raw price ticks into fixed-width OHLCV candles.
- * Gaps (no ticks in a bucket) are forward-filled from previous close.
  */
 function buildCandles(ticks, intervalSec = KLINE_INTERVAL) {
   if (!ticks.length) return [];
