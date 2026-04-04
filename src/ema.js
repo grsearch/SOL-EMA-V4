@@ -1,17 +1,22 @@
 // src/ema.js — EMA calculation + SELL signal logic
 //
-// 沿用 PUMP-EMA-15S 经过实战验证的策略：
+// ═══════════════════════════════════════════════════════════════
+//  SELL 策略（V5 修改版）：EMA9 向下收窄 + 交叉瞬间立即卖出
+// ═══════════════════════════════════════════════════════════════
 //
-// SELL trigger (anti-shake):
-//   EMA9 < EMA20  AND  EMA20 is declining (EMA20_now < EMA20_prev)
-//   must hold for EMA_CONFIRM_BARS (default 2) consecutive candle evaluations.
+//  触发条件（三个同时成立，立即卖出，不等确认）：
+//    1. EMA9 正在向下运动        (ema9_now < ema9_prev)
+//    2. EMA9 与 EMA20 差距收窄  (|ema9_now - ema20_now| < |ema9_prev - ema20_prev|)
+//    3. EMA9 从上方穿越 EMA20   (ema9_prev >= ema20_prev  AND  ema9_now < ema20_now)
 //
-// 不使用种子K线、不使用预热跳过、不要求"下穿"动作。
-// EMA 自然预热：EMA20 需要至少 21 根K线才产生有效值，
-// 15秒K线 × 21 = 315秒 ≈ 5分钟，这段时间就是自然预热期。
+//  核心改变：
+//    - 原逻辑：等死叉后再连续2次确认 → 太晚
+//    - 新逻辑：死叉发生的那根K线，同时满足"向下+收窄"，立即触发
+//    - CONFIRM_BARS 不再用于主卖出信号，保留用于"保底死叉"兜底逻辑
 //
-// Once SELL fires, monitor.js sets exitSent=true immediately, so
-// evaluateSignal() is never called again for that token.
+//  兜底逻辑（保险）：
+//    若主信号因某种原因未触发，EMA9 < EMA20 且 EMA20 斜率向下
+//    连续 CONFIRM_BARS 次仍可触发卖出，防止漏单。
 
 const EMA_FAST       = parseInt(process.env.EMA_FAST           || '9');
 const EMA_SLOW       = parseInt(process.env.EMA_SLOW           || '20');
@@ -46,13 +51,11 @@ function calcEMA(closes, period) {
  *
  * tokenState.bearishCount is the only mutable field touched here.
  *
- * SELL条件（与 PUMP-EMA-15S 完全一致）：
- *   1. EMA9 < EMA20（快线在慢线下方）
- *   2. EMA20 斜率向下（EMA20_now < EMA20_prev）
- *   3. 以上两个条件连续 CONFIRM_BARS 次评估都成立
+ * ─── 主卖出信号（优先）────────────────────────────────────────
+ *  EMA9 向下 + 差距收窄 + 交叉瞬间 → 立即卖出（0确认延迟）
  *
- * 不要求"下穿"动作 — 只要 EMA9 在 EMA20 下方且 EMA20 在下行就算死叉
- * 这解决了"预热期内死叉后永远不卖"的 bug
+ * ─── 兜底信号（保险）─────────────────────────────────────────
+ *  EMA9 < EMA20 且 EMA20 斜率向下，连续 CONFIRM_BARS 次 → 卖出
  */
 function evaluateSignal(candles, tokenState) {
   const closes = candles.map(c => c.close);
@@ -68,17 +71,35 @@ function evaluateSignal(candles, tokenState) {
 
   const ema9_now   = ema9s[len - 1];
   const ema20_now  = ema20s[len - 1];
+  const ema9_prev  = ema9s[len - 2];
   const ema20_prev = ema20s[len - 2];
 
-  if (isNaN(ema9_now) || isNaN(ema20_now) || isNaN(ema20_prev)) {
+  if (isNaN(ema9_now) || isNaN(ema20_now) || isNaN(ema9_prev) || isNaN(ema20_prev)) {
     tokenState.bearishCount = 0;
     return { ema9: NaN, ema20: NaN, signal: null, reason: 'ema_nan' };
   }
 
-  const bearish   = ema9_now < ema20_now;      // EMA9 below EMA20
-  const declining = ema20_now < ema20_prev;     // EMA20 slope downward
+  // ─── 主信号：EMA9向下 + 差距收窄 + 交叉瞬间 ─────────────────
+  const ema9_falling   = ema9_now < ema9_prev;
+  const gap_now        = Math.abs(ema9_now  - ema20_now);
+  const gap_prev       = Math.abs(ema9_prev - ema20_prev);
+  const gap_narrowing  = gap_now < gap_prev;
+  const crossunder     = ema9_prev >= ema20_prev && ema9_now < ema20_now; // 从上方穿越到下方
 
-  // Both conditions must hold simultaneously; one break resets the counter
+  if (ema9_falling && gap_narrowing && crossunder) {
+    tokenState.bearishCount = 0; // 重置兜底计数器
+    return {
+      ema9:   ema9_now,
+      ema20:  ema20_now,
+      signal: 'SELL',
+      reason: `EMA9↓收窄交叉 gap=${gap_now.toExponential(2)} prev=${gap_prev.toExponential(2)}`,
+    };
+  }
+
+  // ─── 兜底信号：经典死叉 + EMA20下行 × CONFIRM_BARS ──────────
+  const bearish   = ema9_now < ema20_now;
+  const declining = ema20_now < ema20_prev;
+
   if (bearish && declining) {
     tokenState.bearishCount = (tokenState.bearishCount || 0) + 1;
   } else {
@@ -90,7 +111,7 @@ function evaluateSignal(candles, tokenState) {
       ema9:   ema9_now,
       ema20:  ema20_now,
       signal: 'SELL',
-      reason: `EMA${EMA_FAST}<EMA${EMA_SLOW} & EMA${EMA_SLOW}↓ ×${tokenState.bearishCount}bars`,
+      reason: `兜底死叉 EMA${EMA_FAST}<EMA${EMA_SLOW} & EMA${EMA_SLOW}↓ ×${tokenState.bearishCount}bars`,
     };
   }
 
