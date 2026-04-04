@@ -37,7 +37,7 @@ const RUG_LARGE_SELL_USD        = parseFloat(process.env.RUG_LARGE_SELL_USD     
 const RUG_LARGE_SELL_GAS_DIFF   = parseFloat(process.env.RUG_LARGE_SELL_GAS_DIFF || '0.005');
 // 信号④ 买盘消失：连续N笔全卖单，或买单金额全部低于阈值
 const RUG_NO_BUY_SELL_COUNT     = parseInt(process.env.RUG_NO_BUY_SELL_COUNT    || '10');
-const RUG_NO_BUY_MIN_USD        = parseFloat(process.env.RUG_NO_BUY_MIN_USD     || '1.0');
+const RUG_NO_BUY_MIN_USD        = parseFloat(process.env.RUG_NO_BUY_MIN_USD     || '0');  // 默认0=禁用，误触发率高
 // 方案B触发参数：
 //   价格1秒内下跌超过此阈值 → 立即触发RUG检测
 //   兜底轮询间隔：即使没有价格异动，每N秒也检测一次
