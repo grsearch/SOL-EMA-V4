@@ -91,7 +91,7 @@ class RugWatcher {
           accountInclude: [PUMP_AMM_PROGRAM],
         },
         {
-          commitment:                     'confirmed',
+          commitment:                     'processed',  // processed比confirmed快400ms-1s
           encoding:                       'jsonParsed',
           transactionDetails:             'full',
           maxSupportedTransactionVersion: 0,

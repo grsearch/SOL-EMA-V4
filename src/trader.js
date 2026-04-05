@@ -26,6 +26,10 @@ const JUP_API_KEY  = process.env.JUPITER_API_KEY           || '';
 const SLIPPAGE_BPS = parseInt(process.env.SLIPPAGE_BPS     || '500');  // ← 默认 5%
 const TRADE_SOL    = parseFloat(process.env.TRADE_SIZE_SOL || '0.5');
 
+// RUG 紧急卖出：优先费（lamports），越高越容易被快速打包
+// 默认 500000 lamports = 0.0005 SOL，约 $0.065，值得花
+const RUG_PRIORITY_FEE = parseInt(process.env.RUG_PRIORITY_FEE_LAMPORTS || '500000');
+
 // 动态滑点上限：重试时最多放宽到 20%
 const SLIPPAGE_MAX_BPS = 2000;
 
@@ -60,7 +64,7 @@ function getConn() {
  * Fetch a Jupiter Ultra swap order.
  * slippageBps 显式传入，供动态重试逻辑使用。
  */
-async function getSwapOrder({ inputMint, outputMint, amount, slippageBps }) {
+async function getSwapOrder({ inputMint, outputMint, amount, slippageBps, priorityFeeLamports }) {
   const url = `${JUP_API}/ultra/v1/order`;
   const { data } = await axios.get(url, {
     params: {
@@ -69,6 +73,8 @@ async function getSwapOrder({ inputMint, outputMint, amount, slippageBps }) {
       amount:      Math.floor(amount).toString(),
       slippageBps: slippageBps ?? SLIPPAGE_BPS,
       taker:       getKeypair().publicKey.toBase58(),
+      // 优先费：RUG紧急卖出时传入高优先费确保快速打包
+      ...(priorityFeeLamports ? { priorityFeeLamports } : {}),
     },
     headers: jupHeaders(),
     timeout: 10000,
@@ -115,14 +121,16 @@ async function buildBuyOrder(tokenMint, solAmountLamports, slippageBps) {
   });
 }
 
-async function buildSellOrder(tokenMint, tokenAmount, slippageBps) {
-  // 卖出滑点 = 传入值的 2 倍，确保止损单能成交，但不超过 SLIPPAGE_MAX_BPS
+async function buildSellOrder(tokenMint, tokenAmount, slippageBps, isRug = false) {
   const base = slippageBps ?? SLIPPAGE_BPS;
+  // RUG紧急卖出：直接用最大滑点 + 高优先费，不重试直接成交
+  const finalSlippage = isRug ? SLIPPAGE_MAX_BPS : Math.min(base * 2, SLIPPAGE_MAX_BPS);
   return getSwapOrder({
-    inputMint:   tokenMint,
-    outputMint:  SOL_MINT,
-    amount:      tokenAmount,
-    slippageBps: Math.min(base * 2, SLIPPAGE_MAX_BPS),
+    inputMint:          tokenMint,
+    outputMint:         SOL_MINT,
+    amount:             tokenAmount,
+    slippageBps:        finalSlippage,
+    priorityFeeLamports: isRug ? RUG_PRIORITY_FEE : undefined,
   });
 }
 
@@ -224,11 +232,18 @@ async function sell(tokenState, fraction, reason) {
   const rawSellAmount = Math.floor(position.tokenBalance * fraction);
   if (rawSellAmount <= 0) return position;
 
-  logger.warn(`[Trader] SELL ${(fraction * 100).toFixed(0)}% ${symbol} (${reason}) @ ${currentPrice}`);
+  // RUG 紧急卖出：使用最大滑点 + 高优先费，跳过重试直接一次成交
+  const isRug = reason && (
+    reason.startsWith('RUG_') ||
+    reason.startsWith('FDV_DROP')
+  );
+
+  logger.warn(`[Trader] SELL ${(fraction * 100).toFixed(0)}% ${symbol} (${reason}) @ ${currentPrice}${isRug ? ' [RUG紧急]' : ''}`);
 
   try {
     const result = await executeWithRetry(
-      (slipBps) => buildSellOrder(address, rawSellAmount, slipBps)
+      (slipBps) => buildSellOrder(address, rawSellAmount, slipBps, isRug),
+      isRug ? 1 : 3  // RUG时不重试，直接一次成交
     );
 
     const solReceived = parseInt(result.outputAmountResult || '0') / LAMPORTS_PER_SOL;
