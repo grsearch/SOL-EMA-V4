@@ -21,10 +21,13 @@ const HELIUS_WS_URL = process.env.HELIUS_WS_URL || '';
 
 // ── RUG 检测参数 ──────────────────────────────────────────────
 const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '6');
-const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '300');
+const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '500');
 const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01');
 const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT           || '999'); // 默认999=禁用，误触发率高
 const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT                || '130');
+// 时间窗口：N笔卖单必须全部在此时间内发生才触发（毫秒）
+// 真RUG通常1-2秒内爆发，正常回调分散在10-30秒
+const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS              || '2000');
 
 const TRADE_WINDOW = 30;
 
@@ -209,21 +212,29 @@ class RugWatcher {
     const trades = watch.trades;
     if (trades.length < 3) return null;
 
-    // 信号①：连续N笔全卖单 + 总金额≥$X + Gas一致
+    // 信号①：连续N笔全卖单 + 总金额≥$X + Gas一致 + 时间窗口内
     const recentN = trades.slice(0, RUG_COORDINATED_MIN_SELLS);
     if (recentN.length >= RUG_COORDINATED_MIN_SELLS) {
       const allSells = recentN.every(t => t.side === 'sell');
       if (allSells) {
+        // 时间窗口检查：最新一笔和最早一笔的时间差必须在窗口内
+        const newest  = recentN[0].time;
+        const oldest  = recentN[recentN.length - 1].time;
+        const spanMs  = newest - oldest;
+        const timeOk  = spanMs <= RUG_TIME_WINDOW_MS;
+
         const totalUsd = recentN.reduce((s, t) => s + t.amountUsd, 0);
         const fees     = recentN.map(t => t.gasFee);
         const feeMin   = Math.min(...fees);
         const feeMax   = Math.max(...fees);
         const gasOk    = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
         const totalOk  = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
-        if (gasOk && totalOk) {
+
+        if (timeOk && gasOk && totalOk) {
           return (
             `RUG_COORDINATED: 连续${recentN.length}笔卖单` +
             ` 总额=$${totalUsd.toFixed(0)}` +
+            ` 时间=${spanMs}ms` +
             ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
           );
         }
