@@ -21,7 +21,7 @@ const HELIUS_WS_URL = process.env.HELIUS_WS_URL || '';
 
 // ── RUG 检测参数 ──────────────────────────────────────────────
 const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '6');
-const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '500');
+const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '800');
 const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01');
 const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT           || '999'); // 默认999=禁用，误触发率高
 const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT                || '130');
