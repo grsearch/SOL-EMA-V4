@@ -157,8 +157,8 @@ class TokenMonitor {
       this._createTradeRecord(state, pos);
 
       // 买入成功后立即开启 Helius WebSocket 实时监控
-      // poolAddress 从 overview 获取，或直接用 tokenAddress（logsSubscribe 会过滤）
-      this.rugWatcher.watch(state.address, state.poolAddress ?? state.address);
+      // logsSubscribe mentions token 地址，Pump AMM / Raydium 均支持，无需 pool 地址
+      this.rugWatcher.watch(state.address);
     } else {
       // 买入失败（Jupiter 错误等）→ 不监控，移除
       logger.warn(`[Monitor] ⚠️  ${state.symbol} 买入失败，移除白名单`);

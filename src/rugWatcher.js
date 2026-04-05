@@ -24,7 +24,8 @@ const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT
 // 每个代币保留最近 N 笔交易用于检测
 const TRADE_WINDOW = 30;
 
-// Raydium AMM program（用于识别 swap 交易）
+// ── 已知 DEX Program 地址 ─────────────────────────────────────
+const PUMP_AMM_PROGRAM  = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
 const RAYDIUM_AMM_PROGRAM = 'routeUGWgpgyZibjFqnNwezdgjinDDoyxe4Hwur7Eux';
 
 class RugWatcher {
@@ -87,18 +88,19 @@ class RugWatcher {
   }
 
   // ── 开始监控某个代币 ─────────────────────────────────────────
-  watch(tokenAddress, poolAddress) {
+  // 只需要 token mint 地址，无需 pool 地址
+  // logsSubscribe mentions 会捕获所有涉及该 token 的交易（Pump AMM / Raydium 均支持）
+  watch(tokenAddress) {
     if (this.watches.has(tokenAddress)) return;
 
     this.watches.set(tokenAddress, {
       tokenAddress,
-      poolAddress,
-      trades:   [],   // 滑动窗口，最新在前
+      trades:    [],
       triggered: false,
     });
 
     this._subscribe(tokenAddress);
-    logger.info(`[RugWatcher] 开始监控 ${tokenAddress.slice(0, 8)} pool=${poolAddress?.slice(0, 8)}`);
+    logger.info(`[RugWatcher] 开始监控 ${tokenAddress.slice(0, 8)}`);
   }
 
   // ── 停止监控 ─────────────────────────────────────────────────
@@ -119,9 +121,11 @@ class RugWatcher {
   }
 
   // ── 内部：发送订阅请求 ────────────────────────────────────────
+  // 使用 logsSubscribe + mentions 过滤
+  // Pump AMM 和 Raydium 的每笔 swap 日志都会 mention token mint 地址
+  // 不需要提前知道 pool 地址，直接监听 token 即可
   _subscribe(tokenAddress) {
-    const watch = this.watches.get(tokenAddress);
-    if (!watch) return;
+    if (!this.watches.has(tokenAddress)) return;
 
     const reqId = this._reqId++;
     const req = {
@@ -129,7 +133,6 @@ class RugWatcher {
       id:      reqId,
       method:  'logsSubscribe',
       params:  [
-        // 监听包含该代币 mint 地址的日志
         { mentions: [tokenAddress] },
         { commitment: 'confirmed' },
       ],
@@ -178,21 +181,28 @@ class RugWatcher {
   // ── 解析交易，推入滑动窗口 ────────────────────────────────────
   _parseTrade(watch, txValue) {
     const logs = txValue.logs ?? [];
+    const sig  = txValue.signature;
+    if (!sig) return;
 
-    // 判断买卖方向：通过日志关键词
-    // Raydium swap 日志包含 "ray_log" 或 "SwapBaseIn"/"SwapBaseOut"
-    const isSwapIn  = logs.some(l => l.includes('SwapBaseIn')  || l.includes('buy'));
-    const isSwapOut = logs.some(l => l.includes('SwapBaseOut') || l.includes('sell'));
+    // 过滤：只处理 Pump AMM 或 Raydium 的 swap 交易
+    const isPumpAMM  = logs.some(l => l.includes(PUMP_AMM_PROGRAM)  || l.includes('Program pAMM'));
+    const isRaydium  = logs.some(l => l.includes(RAYDIUM_AMM_PROGRAM) || l.includes('ray_log'));
+    if (!isPumpAMM && !isRaydium) return;
 
-    if (!isSwapIn && !isSwapOut) return;
+    // Pump AMM 日志关键词：
+    //   买入："Instruction: Buy"
+    //   卖出："Instruction: Sell"
+    const isBuy  = logs.some(l => l.includes('Instruction: Buy'));
+    const isSell = logs.some(l => l.includes('Instruction: Sell'));
 
-    // 从日志中提取金额（简化：用 SOL 变化量估算）
-    // 完整解析需要 getTransaction，这里用签名异步获取
-    const sig = txValue.signature;
-    if (sig) {
-      // 异步获取完整交易数据解析金额
-      this._fetchAndParseTx(watch, sig, isSwapOut ? 'sell' : 'buy');
-    }
+    // Raydium 日志关键词：SwapBaseIn（买）/ SwapBaseOut（卖）
+    const isRayBuy  = logs.some(l => l.includes('SwapBaseIn'));
+    const isRaySell = logs.some(l => l.includes('SwapBaseOut'));
+
+    const side = (isSell || isRaySell) ? 'sell' : (isBuy || isRayBuy) ? 'buy' : null;
+    if (!side) return;
+
+    this._fetchAndParseTx(watch, sig, side);
   }
 
   // ── 异步获取交易详情，解析金额和 Gas ─────────────────────────

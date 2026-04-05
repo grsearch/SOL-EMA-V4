@@ -77,4 +77,23 @@ async function getTopHolders(address, limit = 20) {
   }
 }
 
-module.exports = { getPrice, getTokenOverview, getTrades, getTopHolders };
+/**
+ * 获取代币的 Raydium 流动性池地址（用于 WebSocket 订阅）
+ * 返回池子地址字符串，或 null
+ */
+async function getPoolAddress(tokenAddress) {
+  try {
+    const { data } = await client.get('/defi/token_markets', {
+      params: { address: tokenAddress, sort_by: 'liquidity', sort_type: 'desc', limit: 1 },
+    });
+    const markets = data?.data?.items ?? data?.data ?? [];
+    const first   = Array.isArray(markets) ? markets[0] : null;
+    // Birdeye 返回字段可能是 address / pairAddress / id
+    return first?.address ?? first?.pairAddress ?? first?.id ?? null;
+  } catch (e) {
+    logger.warn(`[Birdeye] getPoolAddress ${tokenAddress.slice(0, 8)}: ${e.message}`);
+    return null;
+  }
+}
+
+module.exports = { getPrice, getTokenOverview, getTrades, getTopHolders, getPoolAddress };
