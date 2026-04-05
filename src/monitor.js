@@ -29,12 +29,10 @@ const LP_MIN_USD         = parseInt(process.env.LP_MIN_USD            || '5000')
 const MAX_TICKS_HISTORY  = 60 * 60 * 1;  // 1h × 60 ticks/min (1s poll) = 3600 ticks max
 
 // ── RUG 检测参数 ──────────────────────────────────────────────
-// 信号① 多地址协同清仓：连续N笔卖单，Gas费差异小于阈值
-const RUG_COORDINATED_MIN_SELLS = parseInt(process.env.RUG_COORDINATED_MIN_SELLS || '5');
-const RUG_GAS_DIFF_THRESHOLD    = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD  || '0.01');
-// 信号② 大额卖单+Gas一致：连续2笔单笔超过阈值且Gas一致
-const RUG_LARGE_SELL_USD        = parseFloat(process.env.RUG_LARGE_SELL_USD      || '200');
-const RUG_LARGE_SELL_GAS_DIFF   = parseFloat(process.env.RUG_LARGE_SELL_GAS_DIFF || '0.005');
+// 信号①：连续卖单 ≥ N笔 + 总金额 ≥ $X + Gas一致，三个条件同时满足才触发
+const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '6');   // 连续卖单数
+const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '300'); // 总金额门槛
+const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01'); // Gas一致性阈值
 // 信号④ 买盘消失：连续N笔全卖单，或买单金额全部低于阈值
 const RUG_NO_BUY_SELL_COUNT     = parseInt(process.env.RUG_NO_BUY_SELL_COUNT    || '10');
 const RUG_NO_BUY_MIN_USD        = parseFloat(process.env.RUG_NO_BUY_MIN_USD     || '0');  // 默认0=禁用，误触发率高
@@ -97,8 +95,8 @@ class TokenMonitor {
       exitSent:     false,
       inPosition:   false,
       // RUG检测状态
-      lastRugCheck:  0,      // 上次调用 getTrades 的时间戳
-      lastPriceForRug: null, // 上一tick价格，用于计算1秒内跌幅
+      lastRugCheck:    0,      // 上次调用 getTrades 的时间戳
+      lastPriceForRug: null,   // 上一tick价格，用于计算1秒内跌幅
     };
 
     this.tokens.set(address, state);
@@ -344,31 +342,25 @@ class TokenMonitor {
 
     if (!trades || trades.length < 3) return null;
 
-    // ── 信号① 多地址协同清仓 ─────────────────────────────────
-    // 取最近 RUG_COORDINATED_MIN_SELLS 笔，如果全是卖单且Gas高度一致 → 触发
-    const recentN = trades.slice(0, RUG_COORDINATED_MIN_SELLS);
+    // ── 信号①：连续N笔全卖单 + 总金额≥$X + Gas一致，同时满足才触发 ──
+    const recentN   = trades.slice(0, RUG_COORDINATED_MIN_SELLS);
     if (recentN.length >= RUG_COORDINATED_MIN_SELLS) {
       const allSells = recentN.every(t => t.side === 'sell');
       if (allSells) {
-        const fees    = recentN.map(t => t.gasFee);
-        const feeMin  = Math.min(...fees);
-        const feeMax  = Math.max(...fees);
-        if (feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD) {
-          return `RUG_COORDINATED: ${recentN.length}笔卖单 Gas差异=${(feeMax - feeMin).toFixed(4)} SOL`;
-        }
-      }
-    }
+        const totalUsd = recentN.reduce((s, t) => s + t.amountUsd, 0);
+        const fees     = recentN.map(t => t.gasFee);
+        const feeMin   = Math.min(...fees);
+        const feeMax   = Math.max(...fees);
+        const gasOk    = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
+        const totalOk  = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
 
-    // ── 信号② 大额卖单 + Gas一致（连续2笔即触发）────────────
-    const largeSells = trades
-      .slice(0, 10)
-      .filter(t => t.side === 'sell' && t.amountUsd >= RUG_LARGE_SELL_USD);
-    if (largeSells.length >= 2) {
-      // 检查前两笔大单的 Gas 一致性
-      const gasA = largeSells[0].gasFee;
-      const gasB = largeSells[1].gasFee;
-      if (Math.abs(gasA - gasB) <= RUG_LARGE_SELL_GAS_DIFF) {
-        return `RUG_LARGE_SELLS: 大单$${largeSells[0].amountUsd.toFixed(0)}+$${largeSells[1].amountUsd.toFixed(0)} Gas差异=${Math.abs(gasA - gasB).toFixed(4)} SOL`;
+        if (gasOk && totalOk) {
+          return (
+            `RUG_COORDINATED: 连续${recentN.length}笔卖单` +
+            ` 总额=$${totalUsd.toFixed(0)}` +
+            ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
+          );
+        }
       }
     }
 

@@ -57,4 +57,24 @@ async function getTrades(address, limit = 30) {
   }
 }
 
-module.exports = { getPrice, getTokenOverview, getTrades };
+/**
+ * 获取 Top N 持仓地址列表，用于判断是否是大户在清仓
+ * 返回格式：[{ address: string, pct: number }]
+ */
+async function getTopHolders(address, limit = 20) {
+  try {
+    const { data } = await client.get('/defi/token_holder', {
+      params: { address, limit },
+    });
+    const list = data?.data?.items ?? [];
+    return list.map(h => ({
+      address: h.address ?? h.owner ?? '',
+      pct:     h.percentage ?? 0,
+    }));
+  } catch (e) {
+    logger.warn(`[Birdeye] getTopHolders ${address.slice(0, 8)}: ${e.message}`);
+    return [];
+  }
+}
+
+module.exports = { getPrice, getTokenOverview, getTrades, getTopHolders };
