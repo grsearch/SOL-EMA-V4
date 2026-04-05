@@ -212,32 +212,28 @@ class RugWatcher {
     const trades = watch.trades;
     if (trades.length < 3) return null;
 
-    // 信号①：连续N笔全卖单 + 总金额≥$X + Gas一致 + 时间窗口内
-    const recentN = trades.slice(0, RUG_COORDINATED_MIN_SELLS);
-    if (recentN.length >= RUG_COORDINATED_MIN_SELLS) {
-      const allSells = recentN.every(t => t.side === 'sell');
-      if (allSells) {
-        // 时间窗口检查：最新一笔和最早一笔的时间差必须在窗口内
-        const newest  = recentN[0].time;
-        const oldest  = recentN[recentN.length - 1].time;
-        const spanMs  = newest - oldest;
-        const timeOk  = spanMs <= RUG_TIME_WINDOW_MS;
+    // 信号①：时间窗口内，卖单笔数≥N + 卖单总金额≥$X + Gas一致
+    // 不要求连续，允许中间夹买单（防绕过检测）
+    const now      = Date.now();
+    const inWindow = trades.filter(t => now - t.time <= RUG_TIME_WINDOW_MS);
+    const sells    = inWindow.filter(t => t.side === 'sell');
 
-        const totalUsd = recentN.reduce((s, t) => s + t.amountUsd, 0);
-        const fees     = recentN.map(t => t.gasFee);
-        const feeMin   = Math.min(...fees);
-        const feeMax   = Math.max(...fees);
-        const gasOk    = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
-        const totalOk  = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
+    if (sells.length >= RUG_COORDINATED_MIN_SELLS) {
+      const totalUsd = sells.reduce((s, t) => s + t.amountUsd, 0);
+      const fees     = sells.map(t => t.gasFee);
+      const feeMin   = Math.min(...fees);
+      const feeMax   = Math.max(...fees);
+      const gasOk    = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
+      const totalOk  = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
 
-        if (timeOk && gasOk && totalOk) {
-          return (
-            `RUG_COORDINATED: 连续${recentN.length}笔卖单` +
-            ` 总额=$${totalUsd.toFixed(0)}` +
-            ` 时间=${spanMs}ms` +
-            ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
-          );
-        }
+      if (gasOk && totalOk) {
+        const spanMs = inWindow[0].time - inWindow[inWindow.length - 1].time;
+        return (
+          `RUG_COORDINATED: ${sells.length}笔卖单/${inWindow.length}笔交易` +
+          ` 总额=$${totalUsd.toFixed(0)}` +
+          ` 时间=${spanMs}ms` +
+          ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
+        );
       }
     }
 
