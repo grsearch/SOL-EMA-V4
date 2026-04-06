@@ -31,6 +31,9 @@ const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS   
 
 // 买单对冲比例：窗口内买单总金额 > 卖单总金额 × 此比例 → 有足够买盘，不触发
 const RUG_BUY_OFFSET_RATIO = parseFloat(process.env.RUG_BUY_OFFSET_RATIO || '0.5');
+// 规则B：小额高频无买单出货（针对1秒内连续小额卖单）
+const RUG_HFREQ_MIN_SELLS  = parseInt(process.env.RUG_HFREQ_MIN_SELLS    || '10');    // 2秒内卖单数门槛
+const RUG_HFREQ_MAX_GAS    = parseFloat(process.env.RUG_HFREQ_MAX_GAS    || '0.001'); // 每笔Gas上限（SOL）
 
 // Pump AMM program address
 const PUMP_AMM_PROGRAM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
@@ -254,7 +257,29 @@ class RugWatcher {
       }
     }
 
-    // 信号④：连续N笔全卖单（买盘消失）
+    // 规则B：小额高频无买单出货
+    // 条件：2秒内 ≥10笔卖单 + 完全没有买单 + Gas全部极低（<$0.001）
+    // 不检查总金额（专门针对小额连砸）
+    // 不需要 RUG_BUY_OFFSET_RATIO（无买单本身已是最严格的对冲检查）
+    if (sells.length >= RUG_HFREQ_MIN_SELLS) {
+      const buysInWindow = inWindow.filter(t => t.side === 'buy');
+      const allLowGas    = sells.every(t => t.gasFee <= RUG_HFREQ_MAX_GAS);
+      const noBuys       = buysInWindow.length === 0;
+
+      if (allLowGas && noBuys) {
+        const totalUsdB = sells.reduce((s, t) => s + t.amountUsd, 0);
+        const spanMsB   = inWindow.length > 1
+          ? inWindow[0].time - inWindow[inWindow.length - 1].time : 0;
+        return (
+          `RUG_HFREQ: ${sells.length}笔卖单 无买单` +
+          ` 总额=$${totalUsdB.toFixed(0)}` +
+          ` 时间=${spanMsB}ms` +
+          ` Gas≤${RUG_HFREQ_MAX_GAS}SOL`
+        );
+      }
+    }
+
+    // 信号④：连续N笔全卖单（买盘消失，默认禁用）
     const recentForBuy = trades.slice(0, RUG_NO_BUY_SELL_COUNT);
     if (recentForBuy.length >= RUG_NO_BUY_SELL_COUNT) {
       if (recentForBuy.every(t => t.side === 'sell')) {
