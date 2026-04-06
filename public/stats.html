@@ -179,7 +179,11 @@ function exitBadge(reason) {
   if (reason.includes('MANUAL')) return '<span class="badge badge-yellow">手动</span>';
   if (reason.includes('EMA') || reason.includes('SELL') || reason.includes('死叉'))
     return '<span class="badge badge-yellow">EMA死叉</span>';
-  return `<span class="badge badge-gray">${reason.slice(0,12)}</span>`;
+  if (reason.includes('RUG_HFREQ'))       return '<span class="badge badge-red">RUG高频</span>';
+  if (reason.includes('RUG_COORDINATED')) return '<span class="badge badge-red">RUG协同</span>';
+  if (reason.includes('RUG_NO_BUYS'))     return '<span class="badge badge-red">RUG无买盘</span>';
+  if (reason.includes('RUG'))             return '<span class="badge badge-red">RUG</span>';
+  return `<span class="badge badge-gray">${reason.slice(0,14)}</span>`;
 }
 
 function pnlClass(v) {
