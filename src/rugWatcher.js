@@ -20,8 +20,8 @@ const logger    = require('./logger');
 const HELIUS_WS_URL = process.env.HELIUS_WS_URL || '';
 
 // ── RUG 检测参数 ──────────────────────────────────────────────
-const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '8');
-const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '1500');
+const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '7');
+const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '1000');
 const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01');
 const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT           || '999'); // 默认999=禁用，误触发率高
 const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT                || '130');
@@ -271,11 +271,15 @@ class RugWatcher {
 
       // 时间跨度在窗口内（推送到达时间跨度，2秒）
       if (spanMs <= RUG_HFREQ_TIME_WINDOW_MS) {
-        // Gas一致性检查（与规则A相同逻辑，差异 < 阈值即为一致）
-        const fees    = latestSells.map(t => t.gasFee);
-        const feeMin  = Math.min(...fees);
-        const feeMax  = Math.max(...fees);
-        const gasOk   = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
+        // Gas一致性检查（大部分相似即可，允许少量异常值）
+        // 取中位数，计算有多少笔的Gas与中位数差异在阈值内
+        const fees      = latestSells.map(t => t.gasFee).sort((a, b) => a - b);
+        const median    = fees[Math.floor(fees.length / 2)];
+        const closeToMedian = latestSells.filter(t =>
+          Math.abs(t.gasFee - median) <= RUG_GAS_DIFF_THRESHOLD
+        );
+        // 80%以上笔数Gas与中位数相近即视为一致
+        const gasOk = closeToMedian.length >= latestSells.length * 0.7;
 
         // 检查这10笔卖单期间是否有买单夹杂
         // 取第10笔和第1笔之间的所有买单
@@ -296,7 +300,7 @@ class RugWatcher {
             `RUG_HFREQ: ${latestSells.length}笔卖单 无买单` +
             ` 总额=$${totalUsdB.toFixed(0)}` +
             ` 时间跨度=${spanMs}ms` +
-            ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
+            ` Gas一致${closeToMedian.length}/${latestSells.length}笔`
           );
         }
       }
