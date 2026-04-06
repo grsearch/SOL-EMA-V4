@@ -29,7 +29,8 @@ const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT     
 // 真RUG通常1-2秒内爆发，正常回调分散在10-30秒
 const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS              || '2000');
 
-const TRADE_WINDOW = 30;
+// 买单对冲比例：窗口内买单总金额 > 卖单总金额 × 此比例 → 有足够买盘，不触发
+const RUG_BUY_OFFSET_RATIO = parseFloat(process.env.RUG_BUY_OFFSET_RATIO || '0.5');
 
 // Pump AMM program address
 const PUMP_AMM_PROGRAM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
@@ -219,20 +220,36 @@ class RugWatcher {
     const sells    = inWindow.filter(t => t.side === 'sell');
 
     if (sells.length >= RUG_COORDINATED_MIN_SELLS) {
-      const totalUsd = sells.reduce((s, t) => s + t.amountUsd, 0);
-      const fees     = sells.map(t => t.gasFee);
-      const feeMin   = Math.min(...fees);
-      const feeMax   = Math.max(...fees);
-      const gasOk    = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
-      const totalOk  = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
+      const totalUsd    = sells.reduce((s, t) => s + t.amountUsd, 0);
+      const fees        = sells.map(t => t.gasFee);
+      const feeMin      = Math.min(...fees);
+      const feeMax      = Math.max(...fees);
+      const gasOk       = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
+      const totalOk     = totalUsd >= RUG_COORDINATED_MIN_TOTAL_USD;
 
-      if (gasOk && totalOk) {
-        const spanMs = inWindow[0].time - inWindow[inWindow.length - 1].time;
+      // 买单对冲检查：窗口内买单总金额 > 卖单总金额 × 比例 → 有足够买盘承接，不是RUG
+      const buys        = inWindow.filter(t => t.side === 'buy');
+      const buyTotal    = buys.reduce((s, t) => s + t.amountUsd, 0);
+      const buyOffsetOk = buyTotal <= totalUsd * RUG_BUY_OFFSET_RATIO;
+
+      if (gasOk && totalOk && buyOffsetOk) {
+        const spanMs = inWindow.length > 1
+          ? inWindow[0].time - inWindow[inWindow.length - 1].time
+          : 0;
         return (
           `RUG_COORDINATED: ${sells.length}笔卖单/${inWindow.length}笔交易` +
-          ` 总额=$${totalUsd.toFixed(0)}` +
+          ` 卖=$${totalUsd.toFixed(0)} 买=$${buyTotal.toFixed(0)}` +
           ` 时间=${spanMs}ms` +
           ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
+        );
+      }
+
+      // 调试：条件未满足时记录原因
+      if (gasOk && totalOk && !buyOffsetOk) {
+        logger.info(
+          `[RugWatcher] 买单对冲拦截 ${watch.tokenAddress.slice(0, 8)}` +
+          ` 卖=$${totalUsd.toFixed(0)} 买=$${buyTotal.toFixed(0)}` +
+          ` 买/卖=${(buyTotal / totalUsd * 100).toFixed(0)}%`
         );
       }
     }
