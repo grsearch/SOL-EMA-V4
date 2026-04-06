@@ -33,7 +33,8 @@ const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS   
 const RUG_BUY_OFFSET_RATIO = parseFloat(process.env.RUG_BUY_OFFSET_RATIO || '0.5');
 // 规则B：小额高频无买单出货（针对1秒内连续小额卖单）
 const RUG_HFREQ_MIN_SELLS  = parseInt(process.env.RUG_HFREQ_MIN_SELLS    || '10');    // 2秒内卖单数门槛
-const RUG_HFREQ_MAX_GAS    = parseFloat(process.env.RUG_HFREQ_MAX_GAS    || '0.001'); // 每笔Gas上限（SOL）
+const RUG_HFREQ_MAX_GAS        = parseFloat(process.env.RUG_HFREQ_MAX_GAS        || '0.001'); // 每笔Gas上限（SOL）
+const RUG_HFREQ_TIME_WINDOW_MS = parseInt(process.env.RUG_HFREQ_TIME_WINDOW_MS   || '5000');  // 最新N笔卖单到达时间跨度上限（允许推送延迟，默认5秒）
 
 // Pump AMM program address
 const PUMP_AMM_PROGRAM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
@@ -257,25 +258,38 @@ class RugWatcher {
       }
     }
 
-    // 规则B：小额高频无买单出货
-    // 条件：2秒内 ≥10笔卖单 + 完全没有买单 + Gas全部极低（<$0.001）
-    // 不检查总金额（专门针对小额连砸）
-    // 不需要 RUG_BUY_OFFSET_RATIO（无买单本身已是最严格的对冲检查）
-    if (sells.length >= RUG_HFREQ_MIN_SELLS) {
-      const buysInWindow = inWindow.filter(t => t.side === 'buy');
-      const allLowGas    = sells.every(t => t.gasFee <= RUG_HFREQ_MAX_GAS);
-      const noBuys       = buysInWindow.length === 0;
 
-      if (allLowGas && noBuys) {
-        const totalUsdB = sells.reduce((s, t) => s + t.amountUsd, 0);
-        const spanMsB   = inWindow.length > 1
-          ? inWindow[0].time - inWindow[inWindow.length - 1].time : 0;
-        return (
-          `RUG_HFREQ: ${sells.length}笔卖单 无买单` +
-          ` 总额=$${totalUsdB.toFixed(0)}` +
-          ` 时间=${spanMsB}ms` +
-          ` Gas≤${RUG_HFREQ_MAX_GAS}SOL`
+
+    // 规则B：小额高频无买单出货（基于最新N笔卖单的时间跨度）
+    // 不用时间窗口，而是看最新10笔卖单从第1笔到第10笔的时间跨度
+    // 这样不受推送延迟影响：只要10笔卖单到达，立即检查它们的跨度
+    const allSells = trades.filter(t => t.side === 'sell');
+    if (allSells.length >= RUG_HFREQ_MIN_SELLS) {
+      const latestSells = allSells.slice(0, RUG_HFREQ_MIN_SELLS);
+      const spanMs      = latestSells[0].time - latestSells[latestSells.length - 1].time;
+
+      // 时间跨度在窗口内（推送到达时间跨度，允许一定延迟）
+      if (spanMs <= RUG_HFREQ_TIME_WINDOW_MS) {
+        const allLowGas = latestSells.every(t => t.gasFee <= RUG_HFREQ_MAX_GAS);
+
+        // 检查这10笔卖单期间是否有买单夹杂
+        // 取第10笔和第1笔之间的所有买单
+        const oldestTime  = latestSells[latestSells.length - 1].time;
+        const newestTime  = latestSells[0].time;
+        const buysInSpan  = trades.filter(t =>
+          t.side === 'buy' && t.time >= oldestTime && t.time <= newestTime
         );
+        const noBuys = buysInSpan.length === 0;
+
+        if (allLowGas && noBuys) {
+          const totalUsdB = latestSells.reduce((s, t) => s + t.amountUsd, 0);
+          return (
+            `RUG_HFREQ: ${latestSells.length}笔卖单 无买单` +
+            ` 总额=$${totalUsdB.toFixed(0)}` +
+            ` 时间跨度=${spanMs}ms` +
+            ` Gas≤${RUG_HFREQ_MAX_GAS}SOL`
+          );
+        }
       }
     }
 
