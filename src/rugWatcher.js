@@ -20,8 +20,8 @@ const logger    = require('./logger');
 const HELIUS_WS_URL = process.env.HELIUS_WS_URL || '';
 
 // ── RUG 检测参数 ──────────────────────────────────────────────
-const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '6');
-const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '800');
+const RUG_COORDINATED_MIN_SELLS     = parseInt(process.env.RUG_COORDINATED_MIN_SELLS      || '8');
+const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN_TOTAL_USD || '1500');
 const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01');
 const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT           || '999'); // 默认999=禁用，误触发率高
 const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT                || '130');
@@ -30,11 +30,12 @@ const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT     
 const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS              || '2000');
 
 // 买单对冲比例：窗口内买单总金额 > 卖单总金额 × 此比例 → 有足够买盘，不触发
-const RUG_BUY_OFFSET_RATIO = parseFloat(process.env.RUG_BUY_OFFSET_RATIO || '0.5');
+const RUG_BUY_OFFSET_RATIO = parseFloat(process.env.RUG_BUY_OFFSET_RATIO || '0.3');
 // 规则B：小额高频无买单出货（针对1秒内连续小额卖单）
 const RUG_HFREQ_MIN_SELLS  = parseInt(process.env.RUG_HFREQ_MIN_SELLS    || '10');    // 2秒内卖单数门槛
-const RUG_HFREQ_MAX_GAS        = parseFloat(process.env.RUG_HFREQ_MAX_GAS        || '0.001'); // 每笔Gas上限（SOL）
-const RUG_HFREQ_TIME_WINDOW_MS = parseInt(process.env.RUG_HFREQ_TIME_WINDOW_MS   || '5000');  // 最新N笔卖单到达时间跨度上限（允许推送延迟，默认5秒）
+// RUG_HFREQ_MAX_GAS 已弃用，改用 RUG_GAS_DIFF_THRESHOLD 统一判断Gas一致性
+const RUG_HFREQ_TIME_WINDOW_MS = parseInt(process.env.RUG_HFREQ_TIME_WINDOW_MS   || '2000');  // 最新N笔卖单到达时间跨度上限（2秒）
+const RUG_HFREQ_MIN_TOTAL_USD  = parseFloat(process.env.RUG_HFREQ_MIN_TOTAL_USD   || '300');   // 规则B卖单总额最低门槛
 
 // Pump AMM program address
 const PUMP_AMM_PROGRAM = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA';
@@ -268,9 +269,13 @@ class RugWatcher {
       const latestSells = allSells.slice(0, RUG_HFREQ_MIN_SELLS);
       const spanMs      = latestSells[0].time - latestSells[latestSells.length - 1].time;
 
-      // 时间跨度在窗口内（推送到达时间跨度，允许一定延迟）
+      // 时间跨度在窗口内（推送到达时间跨度，2秒）
       if (spanMs <= RUG_HFREQ_TIME_WINDOW_MS) {
-        const allLowGas = latestSells.every(t => t.gasFee <= RUG_HFREQ_MAX_GAS);
+        // Gas一致性检查（与规则A相同逻辑，差异 < 阈值即为一致）
+        const fees    = latestSells.map(t => t.gasFee);
+        const feeMin  = Math.min(...fees);
+        const feeMax  = Math.max(...fees);
+        const gasOk   = feeMax - feeMin <= RUG_GAS_DIFF_THRESHOLD;
 
         // 检查这10笔卖单期间是否有买单夹杂
         // 取第10笔和第1笔之间的所有买单
@@ -281,13 +286,17 @@ class RugWatcher {
         );
         const noBuys = buysInSpan.length === 0;
 
-        if (allLowGas && noBuys) {
+        if (gasOk && noBuys) {
           const totalUsdB = latestSells.reduce((s, t) => s + t.amountUsd, 0);
+          if (totalUsdB < RUG_HFREQ_MIN_TOTAL_USD) {
+            logger.info(`[RugWatcher] 规则B金额不足 ${watch.tokenAddress.slice(0, 8)} 总额=$${totalUsdB.toFixed(0)}<$${RUG_HFREQ_MIN_TOTAL_USD}`);
+            return null;
+          }
           return (
             `RUG_HFREQ: ${latestSells.length}笔卖单 无买单` +
             ` 总额=$${totalUsdB.toFixed(0)}` +
             ` 时间跨度=${spanMs}ms` +
-            ` Gas≤${RUG_HFREQ_MAX_GAS}SOL`
+            ` Gas差异=${(feeMax - feeMin).toFixed(4)}SOL`
           );
         }
       }
