@@ -25,6 +25,8 @@ const RUG_COORDINATED_MIN_TOTAL_USD = parseFloat(process.env.RUG_COORDINATED_MIN
 const RUG_GAS_DIFF_THRESHOLD        = parseFloat(process.env.RUG_GAS_DIFF_THRESHOLD        || '0.01');
 const RUG_NO_BUY_SELL_COUNT         = parseInt(process.env.RUG_NO_BUY_SELL_COUNT           || '999'); // 默认999=禁用，误触发率高
 const SOL_PRICE_USD                 = parseFloat(process.env.SOL_PRICE_HINT                || '130');
+// 最低交易金额过滤：低于此值的交易忽略（噪音单，如 $0.003 SOL ≈ $0.25）
+const MIN_TRADE_USD                 = parseFloat(process.env.MIN_TRADE_USD                   || '1');
 // 时间窗口：N笔卖单必须全部在此时间内发生才触发（毫秒）
 // 真RUG通常1-2秒内爆发，正常回调分散在10-30秒
 const RUG_TIME_WINDOW_MS            = parseInt(process.env.RUG_TIME_WINDOW_MS              || '2000');
@@ -190,6 +192,9 @@ class RugWatcher {
     const solLamports = Math.max(0, maxDelta - fee);
     const amountUsd   = (solLamports / 1e9) * SOL_PRICE_USD;
     const gasFee      = fee / 1e9;
+
+    // 过滤极小金额交易（噪音单）
+    if (amountUsd < MIN_TRADE_USD) return;
 
     const sig   = tx.signature ?? transaction.signatures?.[0] ?? '';
     const trade = { side, amountUsd, gasFee, sig: sig.slice(0, 16), time: Date.now() };
