@@ -32,6 +32,8 @@ const RUG_PRIORITY_FEE = parseInt(process.env.RUG_PRIORITY_FEE_LAMPORTS || '5000
 
 // 动态滑点上限：重试时最多放宽到 20%
 const SLIPPAGE_MAX_BPS = 2000;
+// RUG紧急卖出滑点：直接用最大值 9900bps（99%），确保任何情况下都能成交
+const RUG_SLIPPAGE_BPS = parseInt(process.env.RUG_SLIPPAGE_BPS || '9900');
 
 function jupHeaders() {
   return JUP_API_KEY ? { 'x-api-key': JUP_API_KEY } : {};
@@ -123,13 +125,13 @@ async function buildBuyOrder(tokenMint, solAmountLamports, slippageBps) {
 
 async function buildSellOrder(tokenMint, tokenAmount, slippageBps, isRug = false) {
   const base = slippageBps ?? SLIPPAGE_BPS;
-  // RUG紧急卖出：直接用最大滑点 + 高优先费，不重试直接成交
-  const finalSlippage = isRug ? SLIPPAGE_MAX_BPS : Math.min(base * 2, SLIPPAGE_MAX_BPS);
+  // RUG紧急卖出：直接用99%滑点，确保暴跌时也能成交
+  const finalSlippage = isRug ? RUG_SLIPPAGE_BPS : Math.min(base * 2, SLIPPAGE_MAX_BPS);
   return getSwapOrder({
-    inputMint:          tokenMint,
-    outputMint:         SOL_MINT,
-    amount:             tokenAmount,
-    slippageBps:        finalSlippage,
+    inputMint:           tokenMint,
+    outputMint:          SOL_MINT,
+    amount:              tokenAmount,
+    slippageBps:         finalSlippage,
     priorityFeeLamports: isRug ? RUG_PRIORITY_FEE : undefined,
   });
 }
@@ -164,9 +166,9 @@ async function executeWithRetry(orderFn, retries = 3) {
       );
     }
 
-    // 加宽滑点，等待后重试
+    // 加宽滑点，等待后重试（RUG已用最大滑点，缩短等待时间）
     slippage = Math.min(Math.floor(slippage * 1.5), SLIPPAGE_MAX_BPS);
-    if (attempt < retries) await sleep(1500 * attempt);
+    if (attempt < retries) await sleep(500 * attempt);  // 改为500ms，比原1500ms更快
   }
 
   throw new Error(`Swap failed after ${retries} retries`);
@@ -243,7 +245,7 @@ async function sell(tokenState, fraction, reason) {
   try {
     const result = await executeWithRetry(
       (slipBps) => buildSellOrder(address, rawSellAmount, slipBps, isRug),
-      isRug ? 1 : 3  // RUG时不重试，直接一次成交
+      isRug ? 3 : 3  // RUG时也重试3次，99%滑点第一次应成功，失败则继续重试
     );
 
     const solReceived = parseInt(result.outputAmountResult || '0') / LAMPORTS_PER_SOL;
